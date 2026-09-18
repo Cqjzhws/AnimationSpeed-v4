@@ -1,8 +1,8 @@
-// AnimationSpeedTweak v3.7 — bundle-aware single dylib
+// AnimationSpeedTweak v3.8 — bundle-aware single dylib
 // Safe profile (WeChat/WeWork): v6_fix 19-hook + CALayer/CAAnimation 加速
 // Broad profile (other apps): + UIDynamicAnimator, factor 0.001
 //
-// v3.7 修复：CALayer actionForKey: 跳过模糊/背景板图层（CABackdropLayer/
+// v3.8 修复：扩大 CALayer actionForKey: 排除范围（增 mask/snapshot/filter/frost/pull/Gaussian/VisualEffect 子串），
 //   UIVisualEffectView），root cause: 微信下拉小程序面板毛玻璃蒙版被缩到
 //   0.001s 后卡住不消失（v3.5/v3.6 的“图层”bug）。
 //
@@ -231,16 +231,29 @@ static BOOL _swizzleClass(Class cls, SEL orig, SEL repl) {
 @end
 @implementation CALayer (ASTweak_Risky)
 - (id)as_CALayer_actionForKey:(NSString*)key {
-    // v3.7 修复：跳过模糊/背景板图层（UIVisualEffectView 毛玻璃，CABackdropLayer）。
-    // 微信下拉小程序面板的毛玻璃蒙版被这个 hook 缩到 0.001s 后会卡住不消失。
     NSString *clsName = NSStringFromClass([self class]);
-    if ([clsName containsString:@"Backdrop"] ||
-        [clsName containsString:@"VisualEffect"] ||
-        [clsName containsString:@"Blur"]) {
+    // v3.8 修复：扩大排除范围，微信下拉小程序毛玻璃面板类名未必含 Backdrop/VisualEffect/Blur。
+    // 同时检测子类链中是否有相关名称。
+    NSString *lowercaseName = [clsName lowercaseString];
+    if ([lowercaseName containsString:@"backdrop"] ||
+        [lowercaseName containsString:@"visualeffect"] ||
+        [lowercaseName containsString:@"blurlayer"] ||
+        [lowercaseName containsString:@"snapshot"] ||
+        [lowercaseName containsString:@"mask"] ||
+        [lowercaseName containsString:@"filter"] ||
+        [lowercaseName containsString:@"frost"] ||
+        [lowercaseName containsString:@"pull"] ||
+        [clsName containsString:@"Blur"] ||
+        [clsName containsString:@"Gaussian"] ||
+        [clsName containsString:@"UIVisualEffect"]) {
         return [self as_CALayer_actionForKey:key];
     }
-    // 模糊相关的隐式动画键（filters/compositingFilter）也原样放过
-    if ([key isEqualToString:@"filters"] || [key isEqualToString:@"compositingFilter"]) {
+    // 模糊相关隐式动画键原样放过
+    if ([key isEqualToString:@"filters"] ||
+        [key isEqualToString:@"compositingFilter"] ||
+        [key isEqualToString:@"backgroundColor"] ||
+        [key isEqualToString:@"opacity"] ||
+        [key isEqualToString:@"hidden"]) {
         return [self as_CALayer_actionForKey:key];
     }
     id action = [self as_CALayer_actionForKey:key];
