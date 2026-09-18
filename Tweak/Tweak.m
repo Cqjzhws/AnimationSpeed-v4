@@ -17,8 +17,8 @@
 
 // MARK: - 全局状态
 
-static double gFactor          = 0.10;
-static double gMinDurationMs   = 150.0;
+static double gFactor          = 0.001;
+static double gMinDurationMs   = 0.0;
 static BOOL   gInstantMode     = NO;
 static BOOL   gReduceMotion    = NO;
 static BOOL   gCatTransitions  = YES;
