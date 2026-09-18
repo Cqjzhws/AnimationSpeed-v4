@@ -16,7 +16,7 @@
 
 // MARK: - 全局状态
 
-static double gFactor          = 0.02;
+static double gFactor          = 0.01;
 static double gMinDurationMs   = 0.0;  // 0=不保护
 // 最小动画保障：某些系统操作不能太快，否则状态机错乱闪退
 static double gMinPageAnimSec  = 0.050;  // present/push/dismiss 跳转最小 50ms
