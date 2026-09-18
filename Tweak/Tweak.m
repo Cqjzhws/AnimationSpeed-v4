@@ -11,7 +11,6 @@
 
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
-#import <UIKit/UIAccessibility.h>
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 
@@ -398,7 +397,6 @@ static void _install(void) {
     Class CALR_cls    = objc_getClass("CALayer");
     Class UIDy_cls    = objc_getClass("UIDynamicAnimator");
     // UIApplication swizzle removed — ReduceMotion via direct flag
-    Class UIAc_cls    = objc_getClass("UIAccessibility");
 
     swizzleClass(UIView_cls, @selector(animateWithDuration:animations:), @selector(as_animateWithDuration:animations:));
     swizzleClass(UIView_cls, @selector(animateWithDuration:animations:completion:), @selector(as_animateWithDuration:animations:completion:));
