@@ -95,118 +95,118 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
 // ================================
 @implementation AnimationSpeedTweak
 
-// UIView (Class Methods) — animateWithDuration 全家桶
-+ (void)as_animateWithDuration:(NSTimeInterval)d
-                    animations:(void (^)(void))a {
+// MARK: UIView (Class Methods) — animateWithDuration 全家桶
++ (void)as_UIView_animate:(NSTimeInterval)d
+               animations:(void (^)(void))a {
     double f = _effectiveFactor();
-    [self as_animateWithDuration:_scaleInterval(d, f) animations:a];
+    [self as_UIView_animate:_scaleInterval(d, f) animations:a];
 }
 
-+ (void)as_animateWithDuration:(NSTimeInterval)d
-                    animations:(void (^)(void))a
-                    completion:(void (^)(BOOL))c {
++ (void)as_UIView_animate:(NSTimeInterval)d
+               animations:(void (^)(void))a
+               completion:(void (^)(BOOL))c {
     double f = _effectiveFactor();
-    [self as_animateWithDuration:_scaleInterval(d, f) animations:a completion:c];
+    [self as_UIView_animate:_scaleInterval(d, f) animations:a completion:c];
 }
 
-+ (void)as_animateWithDuration:(NSTimeInterval)d
-                         delay:(NSTimeInterval)dl
-                       options:(UIViewAnimationOptions)o
-                    animations:(void (^)(void))a
-                    completion:(void (^)(BOOL))c {
++ (void)as_UIView_animate:(NSTimeInterval)d
+                     delay:(NSTimeInterval)dl
+                   options:(UIViewAnimationOptions)o
+                animations:(void (^)(void))a
+                completion:(void (^)(BOOL))c {
     double f = _effectiveFactor();
-    [self as_animateWithDuration:_scaleInterval(d, f)
-                           delay:dl * f
-                         options:o
-                      animations:a
-                      completion:c];
+    [self as_UIView_animate:_scaleInterval(d, f)
+                       delay:dl * f
+                     options:o
+                  animations:a
+                  completion:c];
 }
 
-+ (void)as_animateWithDuration:(NSTimeInterval)d
-                         delay:(NSTimeInterval)dl
-          usingSpringWithDamping:(CGFloat)dr
-           initialSpringVelocity:(CGFloat)v
-                         options:(UIViewAnimationOptions)o
-                      animations:(void (^)(void))a
-                      completion:(void (^)(BOOL))c {
++ (void)as_UIView_animate:(NSTimeInterval)d
+                     delay:(NSTimeInterval)dl
+      usingSpringWithDamping:(CGFloat)dr
+       initialSpringVelocity:(CGFloat)v
+                     options:(UIViewAnimationOptions)o
+                  animations:(void (^)(void))a
+                  completion:(void (^)(BOOL))c {
     double f = _effectiveFactor();
-    [self as_animateWithDuration:_scaleInterval(d, f)
-                           delay:dl * f
-            usingSpringWithDamping:dr
-             initialSpringVelocity:v * f
-                         options:o
-                      animations:a
-                      completion:c];
+    [self as_UIView_animate:_scaleInterval(d, f)
+                       delay:dl * f
+        usingSpringWithDamping:dr
+         initialSpringVelocity:v * f
+                     options:o
+                  animations:a
+                  completion:c];
 }
 
-+ (void)as_transitionWithView:(UIView *)vw
-                      duration:(NSTimeInterval)d
-                       options:(UIViewAnimationOptions)o
-                    animations:(void (^)(void))a
-                    completion:(void (^)(BOOL))c {
++ (void)as_UIView_transitionWithView:(UIView *)vw
+                             duration:(NSTimeInterval)d
+                              options:(UIViewAnimationOptions)o
+                           animations:(void (^)(void))a
+                           completion:(void (^)(BOOL))c {
     double f = _effectiveFactor();
-    [self as_transitionWithView:vw duration:_scaleInterval(d, f) options:o animations:a completion:c];
+    [self as_UIView_transitionWithView:vw duration:_scaleInterval(d, f) options:o animations:a completion:c];
 }
 
-+ (void)as_transitionFromView:(UIView *)fv
-                       toView:(UIView *)tv
-                     duration:(NSTimeInterval)d
-                      options:(UIViewAnimationOptions)o
-                   completion:(void (^)(BOOL))c {
++ (void)as_UIView_transitionFromView:(UIView *)fv
+                               toView:(UIView *)tv
+                             duration:(NSTimeInterval)d
+                              options:(UIViewAnimationOptions)o
+                           completion:(void (^)(BOOL))c {
     double f = _effectiveFactor();
-    [self as_transitionFromView:fv toView:tv duration:_scaleInterval(d, f) options:o completion:c];
+    [self as_UIView_transitionFromView:fv toView:tv duration:_scaleInterval(d, f) options:o completion:c];
 }
 
-// UIViewPropertyAnimator
-- (instancetype)as_initWithDuration:(NSTimeInterval)d
-                  timingParameters:(id<UITimingCurveProvider>)tp {
+// MARK: UIViewPropertyAnimator
+- (instancetype)as_UIPA_initDuration:(NSTimeInterval)d
+                    timingParameters:(id<UITimingCurveProvider>)tp {
     double f = _effectiveFactor();
-    return [self as_initWithDuration:_scaleInterval(d, f) timingParameters:tp];
+    return [self as_UIPA_initDuration:_scaleInterval(d, f) timingParameters:tp];
 }
 
-- (instancetype)as_initWithDuration:(NSTimeInterval)d
-                      dampingRatio:(CGFloat)r
-                        animations:(void (^)(void))a {
+- (instancetype)as_UIPA_initDuration:(NSTimeInterval)d
+                        dampingRatio:(CGFloat)r
+                          animations:(void (^)(void))a {
     double f = _effectiveFactor();
-    return [self as_initWithDuration:_scaleInterval(d, f) dampingRatio:r animations:a];
+    return [self as_UIPA_initDuration:_scaleInterval(d, f) dampingRatio:r animations:a];
 }
 
-- (void)as_setDuration:(NSTimeInterval)d {
+- (void)as_UIPA_setDuration:(NSTimeInterval)d {
     double f = _effectiveFactor();
-    [self as_setDuration:_scaleInterval(d, f)];
+    [self as_UIPA_setDuration:_scaleInterval(d, f)];
 }
 
-// UIScrollView
-- (void)as_setContentOffset:(CGPoint)o animated:(BOOL)an {
-    if (!an) { [self as_setContentOffset:o animated:an]; return; }
+// MARK: UIScrollView
+- (void)as_UISV_setContentOffset:(CGPoint)o animated:(BOOL)an {
+    if (!an) { [self as_UISV_setContentOffset:o animated:an]; return; }
     double f = _effectiveFactor();
     [UIView animateWithDuration:_scaleInterval(0.25, f)
                           delay:0
                         options:UIViewAnimationOptionCurveEaseInOut
-                     animations:^{ [self as_setContentOffset:o animated:NO]; }
+                     animations:^{ [self as_UISV_setContentOffset:o animated:NO]; }
                      completion:nil];
 }
 
-- (void)as_scrollRectToVisible:(CGRect)r animated:(BOOL)an {
-    if (!an) { [self as_scrollRectToVisible:r animated:an]; return; }
+- (void)as_UISV_scrollRectToVisible:(CGRect)r animated:(BOOL)an {
+    if (!an) { [self as_UISV_scrollRectToVisible:r animated:an]; return; }
     double f = _effectiveFactor();
     [UIView animateWithDuration:_scaleInterval(0.25, f)
                           delay:0
                         options:UIViewAnimationOptionCurveEaseInOut
-                     animations:^{ [self as_scrollRectToVisible:r animated:NO]; }
+                     animations:^{ [self as_UISV_scrollRectToVisible:r animated:NO]; }
                      completion:nil];
 }
 
-// CATransaction（控制所有 Core Animation 动画时长）
-+ (void)as_setAnimationDuration:(CFTimeInterval)d {
+// MARK: CATransaction
++ (void)as_CATrans_setDuration:(CFTimeInterval)d {
     double f = _effectiveFactor();
-    [self as_setAnimationDuration:_scaleInterval(d, f)];
+    [self as_CATrans_setDuration:_scaleInterval(d, f)];
 }
 
-// CAPropertyAnimation
-- (void)as_setDuration:(CFTimeInterval)d {
+// MARK: CAPropertyAnimation
++ (void)as_CAProp_setDuration:(CFTimeInterval)d {
     double f = _effectiveFactor();
-    [self as_setDuration:_scaleInterval(d, f)];
+    [self as_CAProp_setDuration:_scaleInterval(d, f)];
 }
 
 @end
@@ -225,50 +225,47 @@ static void _astweak_install(void) {
         NSLog(@"[AnimationSpeedTweak] factor=%.3f minMs=%.0f instant=%d",
               f, gMinDurationMs, gInstantMode);
 
-        Class cls = [AnimationSpeedTweak class];
-
         // UIView 动画类方法
         Class UIView_cls = [UIView class];
         _swizzleClass(UIView_cls, @selector(animateWithDuration:animations:),
-                      @selector(as_animateWithDuration:animations:));
+                      @selector(as_UIView_animate:animations:));
         _swizzleClass(UIView_cls, @selector(animateWithDuration:animations:completion:),
-                      @selector(as_animateWithDuration:animations:completion:));
+                      @selector(as_UIView_animate:animations:completion:));
         _swizzleClass(UIView_cls, @selector(animateWithDuration:delay:options:animations:completion:),
-                      @selector(as_animateWithDuration:delay:options:animations:completion:));
+                      @selector(as_UIView_animate:delay:options:animations:completion:));
         _swizzleClass(UIView_cls, @selector(animateWithDuration:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:),
-                      @selector(as_animateWithDuration:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:));
+                      @selector(as_UIView_animate:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:));
         _swizzleClass(UIView_cls, @selector(transitionWithView:duration:options:animations:completion:),
-                      @selector(as_transitionWithView:duration:options:animations:completion:));
+                      @selector(as_UIView_transitionWithView:duration:options:animations:completion:));
         _swizzleClass(UIView_cls, @selector(transitionFromView:toView:duration:options:completion:),
-                      @selector(as_transitionFromView:toView:duration:options:completion:));
+                      @selector(as_UIView_transitionFromView:toView:duration:options:completion:));
 
         // UIViewPropertyAnimator
         Class UIPA_cls = [UIViewPropertyAnimator class];
         _swizzleInstance(UIPA_cls, @selector(initWithDuration:timingParameters:),
-                         @selector(as_initWithDuration:timingParameters:));
+                         @selector(as_UIPA_initDuration:timingParameters:));
         _swizzleInstance(UIPA_cls, @selector(initWithDuration:dampingRatio:animations:),
-                         @selector(as_initWithDuration:dampingRatio:animations:));
+                         @selector(as_UIPA_initDuration:dampingRatio:animations:));
         _swizzleInstance(UIPA_cls, @selector(setDuration:),
-                         @selector(as_setDuration:));
+                         @selector(as_UIPA_setDuration:));
 
         // UIScrollView
         Class UISV_cls = [UIScrollView class];
         _swizzleInstance(UISV_cls, @selector(setContentOffset:animated:),
-                         @selector(as_setContentOffset:animated:));
+                         @selector(as_UISV_setContentOffset:animated:));
         _swizzleInstance(UISV_cls, @selector(scrollRectToVisible:animated:),
-                         @selector(as_scrollRectToVisible:animated:));
+                         @selector(as_UISV_scrollRectToVisible:animated:));
 
         // CATransaction
         Class CATrans_cls = [CATransaction class];
         _swizzleClass(CATrans_cls, @selector(setAnimationDuration:),
-                      @selector(as_setAnimationDuration:));
+                      @selector(as_CATrans_setDuration:));
 
         // CAPropertyAnimation
         Class CAProp_cls = [CAPropertyAnimation class];
-        _swizzleInstance(CAProp_cls, @selector(setDuration:),
-                         @selector(as_setDuration:));
+        _swizzleClass(CAProp_cls, @selector(setDuration:),
+                      @selector(as_CAProp_setDuration:));
 
         NSLog(@"[AnimationSpeedTweak] all hooks installed OK");
-        (void)cls; // suppress unused warning
     }
 }
