@@ -77,10 +77,9 @@ jobs:
           echo "Found: $APP_PATH"
           if [ -n "$APP_PATH" ] && [ -d "$APP_PATH" ]; then
             echo "App size: $(du -sh "$APP_PATH" | cut -f1)"
-            mkdir -p artifacts
-            # IPA = zip 格式的 .app 目录
-            cd "$(dirname "$APP_PATH")"
-            zip -r "$WS/artifacts/AnimationSpeed_4.0.0.ipa" "$(basename "$APP_PATH")" -x "*.DS_Store"
+            mkdir -p "$WS/artifacts"
+            # IPA = zip 格式的 .app 目录（绝对路径，不 cd）
+            zip -r "$WS/artifacts/AnimationSpeed_4.0.0.ipa" "$APP_PATH" -x "*.DS_Store"
             echo "IPA size: $(du -h "$WS/artifacts/AnimationSpeed_4.0.0.ipa" | cut -f1)"
           else
             echo "ERROR: .app not found"
