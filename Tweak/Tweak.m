@@ -1,11 +1,14 @@
-// AnimationSpeedTweak v3.5 — bundle-aware single dylib
-// Safe profile (WeChat/WeWork): v6_fix 19-hook + CALayer/C AAnimation 加速
-// Broad profile (other apps): +UIDynamicAnimator, factor 0.01
+// AnimationSpeedTweak v3.7 — bundle-aware single dylib
+// Safe profile (WeChat/WeWork): v6_fix 19-hook + CALayer/CAAnimation 加速
+// Broad profile (other apps): + UIDynamicAnimator, factor 0.001
+//
+// v3.7 修复：CALayer actionForKey: 跳过模糊/背景板图层（CABackdropLayer/
+//   UIVisualEffectView），root cause: 微信下拉小程序面板毛玻璃蒙版被缩到
+//   0.001s 后卡住不消失（v3.5/v3.6 的“图层”bug）。
 //
 // 修复：CAPropertyAnimation setDuration 是类方法→swizzleClass；
 //       swizzle helper 用 class_addMethod 桥接（v6_fix 验证机制）；
-//       safe profile 加回 CALayer actionForKey + CAAnimation setDuration
-//       （v3.1极速感的主要来源，v6_fix 因稳定顾虑去掉了）。
+//       safe profile 加回 CALayer actionForKey + CAAnimation setDuration。
 //
 // 编译：clang -arch arm64 -dynamiclib -isysroot $SDK -undefined dynamic_lookup -fobjc-arc \
 //        -framework Foundation -framework UIKit -framework QuartzCore -o AnimationSpeedTweak.dylib Tweak.m
@@ -228,6 +231,18 @@ static BOOL _swizzleClass(Class cls, SEL orig, SEL repl) {
 @end
 @implementation CALayer (ASTweak_Risky)
 - (id)as_CALayer_actionForKey:(NSString*)key {
+    // v3.7 修复：跳过模糊/背景板图层（UIVisualEffectView 毛玻璃，CABackdropLayer）。
+    // 微信下拉小程序面板的毛玻璃蒙版被这个 hook 缩到 0.001s 后会卡住不消失。
+    NSString *clsName = NSStringFromClass([self class]);
+    if ([clsName containsString:@"Backdrop"] ||
+        [clsName containsString:@"VisualEffect"] ||
+        [clsName containsString:@"Blur"]) {
+        return [self as_CALayer_actionForKey:key];
+    }
+    // 模糊相关的隐式动画键（filters/compositingFilter）也原样放过
+    if ([key isEqualToString:@"filters"] || [key isEqualToString:@"compositingFilter"]) {
+        return [self as_CALayer_actionForKey:key];
+    }
     id action = [self as_CALayer_actionForKey:key];
     if ([action isKindOfClass:[CAAnimation class]]) {
         [(CAAnimation*)action as_CAAnim_setDuration:_scaleVC([(CAAnimation*)action duration], _effectiveFactor(), 20)];
