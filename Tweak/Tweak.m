@@ -1,10 +1,12 @@
-// AnimationSpeedTweak v3.1 (injectable) — pure Objective-C runtime swizzle, ZERO external deps.
+// AnimationSpeedTweak v3.4 — bundle-aware single dylib
+// Safe profile (WeChat/WeWork): exact v6_fix 19-hook set, factor 0.001
+// Broad profile (other apps): +激进hook, factor 0.01
+// 修复：CAPropertyAnimation setDuration 是类方法→swizzleClass；
+//       swizzle helper 用 class_addMethod 桥接（v6_fix 验证机制）；
+//       激进 hook 仅在非 safe profile 时安装。
 //
-// 专为 TrollFools 注入设计：不依赖 CydiaSubstrate / Logos，
-// 用 method_exchangeImplementations 直接交换方法，注入任意 App 即可生效。
 // 编译：clang -arch arm64 -dynamiclib -isysroot $SDK -undefined dynamic_lookup -fobjc-arc \
 //        -framework Foundation -framework UIKit -framework QuartzCore -o AnimationSpeedTweak.dylib Tweak.m
-// 配置：/var/Managed Preferences/mobile/com.developlab.animationspeed.plist（App 端写，dylib 实时读）
 
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -13,24 +15,14 @@
 
 // MARK: - 全局状态
 
-static double gFactor          = 0.010;  // 广覆盖 v3.3：factor=0.01（非微信 App）
-static double gWeChatFactor    = 0.001;  // 微信安全档：窄覆盖 + 0.001（v6 实测稳定）
+static double gFactor          = 0.010;  // 非微信 App 广覆盖档
+static double gWeChatFactor    = 0.001;  // 微信安全档（v6 实测稳定）
 static BOOL   gSafeProfile     = NO;     // YES=微信等敏感 App：只装安全 hook 集
-static double gMinDurationMs   = 0.0;  // 0=不保护
-// 最小动画保障：视图控制器转场不能太快，否则状态机错乱闪退（微信实测 50ms 安全）
-static double gMinPageAnimSec  = 0.050;  // present/push/pop/dismiss/弹层 跳转最小 50ms
-static double gMinViewAnimSec  = 0.016;  // 普通视图动画最小 16ms（1 帧）
-static double gMinCALayerSec   = 0.020;  // 内部 CAAnimation/CALayer 最小 20ms
 static BOOL   gInstantMode     = NO;
-static BOOL   gReduceMotion    = NO;
-static BOOL   gCatTransitions  = YES;
-static BOOL   gCatSprings      = YES;
-static BOOL   gCatScroll       = YES;
-static BOOL   gCatKeyboard     = YES;
-static BOOL   gCatLayers       = YES;
+static double gMinPageAnimSec  = 0.050;  // 页面跳转最小 50ms（防状态机闪退）
+static double gMinViewAnimSec  = 0.016;  // 视图动画最小 16ms（1 帧）
+static double gMinCALayerSec   = 0.020;  // 内部 CA 动画最小 20ms
 
-static NSMutableSet<NSString*> *gBlacklist;
-static NSMutableDictionary<NSString*,NSNumber*> *gPerApp;
 static NSString *const kConfigPath = @"/var/Managed Preferences/mobile/com.developlab.animationspeed.plist";
 static NSTimeInterval gLastReload = 0;
 
@@ -45,433 +37,301 @@ static void _reloadConfigIfNeeded(void) {
         if (![d isKindOfClass:[NSDictionary class]]) return;
         NSNumber *f = d[@"ViewAnimationFactor"];
         if ([f isKindOfClass:[NSNumber class]] && f.doubleValue > 0 && f.doubleValue <= 2.0) gFactor = f.doubleValue;
-        NSNumber *min = d[@"MinDurationMs"];
-        if ([min isKindOfClass:[NSNumber class]] && min.doubleValue >= 0) gMinDurationMs = min.doubleValue;
         NSNumber *inst = d[@"InstantMode"]; if ([inst isKindOfClass:[NSNumber class]]) gInstantMode = inst.boolValue;
-        NSNumber *rm = d[@"ReduceMotion"]; if ([rm isKindOfClass:[NSNumber class]]) gReduceMotion = rm.boolValue;
-        NSDictionary *cat = d[@"Categories"];
-        if ([cat isKindOfClass:[NSDictionary class]]) {
-            NSNumber *t=cat[@"Transitions"]; if (t) gCatTransitions=t.boolValue;
-            NSNumber *s=cat[@"Springs"];     if (s) gCatSprings=s.boolValue;
-            NSNumber *sc=cat[@"Scroll"];     if (sc) gCatScroll=sc.boolValue;
-            NSNumber *k=cat[@"Keyboard"];    if (k) gCatKeyboard=k.boolValue;
-            NSNumber *l=cat[@"Layers"];      if (l) gCatLayers=l.boolValue;
-        }
-        NSArray *bl = d[@"Blacklist"];
-        if ([bl isKindOfClass:[NSArray class]]) {
-            [gBlacklist removeAllObjects];
-            for (id x in bl) if ([x isKindOfClass:[NSString class]]) [gBlacklist addObject:x];
-        }
-        NSDictionary *pa = d[@"PerApp"];
-        if ([pa isKindOfClass:[NSDictionary class]]) {
-            [gPerApp removeAllObjects];
-            for (id k in pa) if ([k isKindOfClass:[NSString class]] && [pa[k] isKindOfClass:[NSNumber class]]) gPerApp[k]=pa[k];
-        }
     }
 }
 
 static double _effectiveFactor(void) {
     _reloadConfigIfNeeded();
     if (gInstantMode) return 0.0;
-    NSString *bid = NSBundle.mainBundle.bundleIdentifier;
-    if (bid && [gBlacklist containsObject:bid]) return 1.0;
-    if (bid) { NSNumber *o = gPerApp[bid]; if (o && o.doubleValue>0 && o.doubleValue<=2.0) return o.doubleValue; }
     return gFactor;
 }
 
-// 转场专用：factor 极小时保底 50ms，防状态机 race 闪退
-static inline double _pageF(double f) {
-    return (f < gMinPageAnimSec) ? gMinPageAnimSec : f;
+// 带下限的缩放（用于 CA 层级）
+static inline NSTimeInterval _scaleVC(NSTimeInterval t, double f, double minMs) {
+    if (gInstantMode) return 0.0;
+    if (t <= 0) return t;
+    NSTimeInterval s = t * f;
+    return (s * 1000.0 < minMs) ? (minMs / 1000.0) : s;
 }
 
+// 视图动画缩放（带下限）
 static inline NSTimeInterval _scaleInterval(NSTimeInterval t, double f) {
     if (gInstantMode) return 0.0;
     if (t <= 0) return t;
-    if (t*1000.0 < gMinDurationMs) return t;
-    NSTimeInterval s = t*f; return s < gMinViewAnimSec ? gMinViewAnimSec : s;
-}
-static inline CFTimeInterval _scaleCF(CFTimeInterval t, double f) {
-    if (gInstantMode) return 0.0;
-    if (t <= 0) return t;
-    if (t*1000.0 < gMinDurationMs) return t;
-    CFTimeInterval s = t*f; return s < gMinCALayerSec ? gMinCALayerSec : s;
+    NSTimeInterval s = t * f;
+    return (s < gMinViewAnimSec) ? gMinViewAnimSec : s;
 }
 
-// MARK: - swizzle helpers
+// MARK: - swizzle helpers（v6_fix 验证机制：NULL 检查 + class_addMethod 桥接）
 
-static void swizzleInstance(Class cls, SEL orig, SEL repl) {
-    if (!cls) return;
-    Method m = class_getInstanceMethod(cls, orig);
-    Method m2 = class_getInstanceMethod(cls, repl);
-    if (m && m2) method_exchangeImplementations(m, m2);
-}
-static void swizzleClass(Class cls, SEL orig, SEL repl) {
-    if (!cls) return;
-    Method m = class_getClassMethod(cls, orig);
-    Method m2 = class_getClassMethod(cls, repl);
-    if (m && m2) method_exchangeImplementations(m, m2);
+static BOOL _swizzleInstance(Class cls, SEL orig, SEL repl) {
+    if (!cls) { NSLog(@"[AST] skip nil cls for %@", NSStringFromSelector(orig)); return NO; }
+    Method origMethod = class_getInstanceMethod(cls, orig);
+    Method replMethod = class_getInstanceMethod(objc_getClass("AnimationSpeedTweak"), repl);
+    if (!origMethod) { NSLog(@"[AST] MISS orig %@ on %@", NSStringFromSelector(orig), cls); return NO; }
+    if (!replMethod) { NSLog(@"[AST] MISS repl %@ on AnimationSpeedTweak", NSStringFromSelector(repl)); return NO; }
+    IMP replImp = method_getImplementation(replMethod);
+    const char *types = method_getTypeEncoding(replMethod);
+    if (!class_addMethod(cls, repl, replImp, types)) {
+        Method existing = class_getInstanceMethod(cls, repl);
+        if (existing) { method_exchangeImplementations(origMethod, existing); return YES; }
+        NSLog(@"[AST] FAIL add %@ to %@", NSStringFromSelector(repl), cls); return NO;
+    }
+    Method replInCls = class_getInstanceMethod(cls, repl);
+    method_exchangeImplementations(origMethod, replInCls);
+    return YES;
 }
 
-// MARK: - UIView (class methods)
-
-@interface UIView (ASTweak)
-@end
-@implementation UIView (ASTweak)
-
-+ (void)as_animateWithDuration:(NSTimeInterval)d animations:(void(^)(void))a {
-    double f = _effectiveFactor();
-    if (!gCatTransitions) { [self as_animateWithDuration:d animations:a]; return; }
-    [self as_animateWithDuration:_scaleInterval(d,f) animations:a];
+static BOOL _swizzleClass(Class cls, SEL orig, SEL repl) {
+    if (!cls) { NSLog(@"[AST] skip nil cls for %@", NSStringFromSelector(orig)); return NO; }
+    Method origMethod = class_getClassMethod(cls, orig);
+    Method replMethod = class_getClassMethod(objc_getClass("AnimationSpeedTweak"), repl);
+    if (!origMethod) { NSLog(@"[AST] MISS orig %@ on %@", NSStringFromSelector(orig), cls); return NO; }
+    if (!replMethod) { NSLog(@"[AST] MISS repl %@ on AnimationSpeedTweak", NSStringFromSelector(repl)); return NO; }
+    IMP replImp = method_getImplementation(replMethod);
+    const char *types = method_getTypeEncoding(replMethod);
+    Class meta = object_getClass(cls);
+    if (!class_addMethod(meta, repl, replImp, types)) {
+        Method existing = class_getClassMethod(cls, repl);
+        if (existing) { method_exchangeImplementations(origMethod, existing); return YES; }
+        NSLog(@"[AST] FAIL add %@ to meta %@", NSStringFromSelector(repl), cls); return NO;
+    }
+    Method replInCls = class_getClassMethod(cls, repl);
+    method_exchangeImplementations(origMethod, replInCls);
+    return YES;
 }
-+ (void)as_animateWithDuration:(NSTimeInterval)d animations:(void(^)(void))a completion:(void(^)(BOOL))c {
-    double f = _effectiveFactor();
-    if (!gCatTransitions) { [self as_animateWithDuration:d animations:a completion:c]; return; }
-    [self as_animateWithDuration:_scaleInterval(d,f) animations:a completion:c];
-}
-+ (void)as_animateWithDuration:(NSTimeInterval)d delay:(NSTimeInterval)dl options:(UIViewAnimationOptions)o animations:(void(^)(void))a completion:(void(^)(BOOL))c {
-    double f = _effectiveFactor();
-    if (!gCatTransitions) { [self as_animateWithDuration:d delay:dl options:o animations:a completion:c]; return; }
-    [self as_animateWithDuration:_scaleInterval(d,f) delay:_scaleInterval(dl,f) options:o animations:a completion:c];
-}
-+ (void)as_animateWithDuration:(NSTimeInterval)d delay:(NSTimeInterval)dl usingSpringWithDamping:(CGFloat)dr initialSpringVelocity:(CGFloat)v options:(UIViewAnimationOptions)o animations:(void(^)(void))a completion:(void(^)(BOOL))c {
-    double f = _effectiveFactor();
-    if (!gCatTransitions && !gCatSprings) { [self as_animateWithDuration:d delay:dl usingSpringWithDamping:dr initialSpringVelocity:v options:o animations:a completion:c]; return; }
-    [self as_animateWithDuration:_scaleInterval(d,f) delay:_scaleInterval(dl,f) usingSpringWithDamping:dr initialSpringVelocity:v options:o animations:a completion:c];
-}
-+ (void)as_transitionWithView:(UIView*)vw duration:(NSTimeInterval)d options:(UIViewAnimationOptions)o animations:(void(^)(void))a completion:(void(^)(BOOL))c {
-    double f = _effectiveFactor();
-    if (!gCatTransitions) { [self as_transitionWithView:vw duration:d options:o animations:a completion:c]; return; }
-    [self as_transitionWithView:vw duration:_scaleInterval(d,f) options:o animations:a completion:c];
-}
-+ (void)as_transitionFromView:(UIView*)fv toView:(UIView*)tv duration:(NSTimeInterval)d options:(UIViewAnimationOptions)o completion:(void(^)(BOOL))c {
-    double f = _effectiveFactor();
-    if (!gCatTransitions) { [self as_transitionFromView:fv toView:tv duration:d options:o completion:c]; return; }
-    [self as_transitionFromView:fv toView:tv duration:_scaleInterval(d,f) options:o completion:c];
-}
-@end
 
-// MARK: - CATransaction
+// MARK: - AnimationSpeedTweak 方法实现（全部是 class method，供 swizzle 桥接用）
 
-@interface CATransaction (ASTweak)
-@end
-@implementation CATransaction (ASTweak)
-+ (void)as_setAnimationDuration:(CFTimeInterval)d { [self as_setAnimationDuration:_scaleCF(d,_effectiveFactor())]; }
-@end
+@implementation AnimationSpeedTweak
 
-// MARK: - UIViewPropertyAnimator
+// UIView animateWithDuration:animations:
++ (void)as_UIView_animate:(NSTimeInterval)d animations:(void(^)(void))a {
+    [self as_UIView_animate:_scaleInterval(d, _effectiveFactor()) animations:a];
+}
+// UIView animateWithDuration:animations:completion:
++ (void)as_UIView_animate:(NSTimeInterval)d animations:(void(^)(void))a completion:(void(^)(BOOL))c {
+    [self as_UIView_animate:_scaleInterval(d, _effectiveFactor()) animations:a completion:c];
+}
+// UIView animateWithDuration:delay:options:animations:completion:
++ (void)as_UIView_animate:(NSTimeInterval)d delay:(NSTimeInterval)dl options:(UIViewAnimationOptions)o animations:(void(^)(void))a completion:(void(^)(BOOL))c {
+    [self as_UIView_animate:_scaleInterval(d,_effectiveFactor()) delay:dl*_effectiveFactor() options:o animations:a completion:c];
+}
+// UIView animateWithDuration:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:
++ (void)as_UIView_animate:(NSTimeInterval)d delay:(NSTimeInterval)dl usingSpringWithDamping:(CGFloat)dr initialSpringVelocity:(CGFloat)v options:(UIViewAnimationOptions)o animations:(void(^)(void))a completion:(void(^)(BOOL))c {
+    [self as_UIView_animate:_scaleInterval(d,_effectiveFactor()) delay:dl*_effectiveFactor() usingSpringWithDamping:dr initialSpringVelocity:v*_effectiveFactor() options:o animations:a completion:c];
+}
+// UIView transitionWithView:duration:options:animations:completion:
++ (void)as_UIView_transitionWithView:(UIView*)vw duration:(NSTimeInterval)d options:(UIViewAnimationOptions)o animations:(void(^)(void))a completion:(void(^)(BOOL))c {
+    [self as_UIView_transitionWithView:vw duration:_scaleInterval(d,_effectiveFactor()) options:o animations:a completion:c];
+}
+// UIView transitionFromView:toView:duration:options:completion:
++ (void)as_UIView_transitionFromView:(UIView*)fv toView:(UIView*)tv duration:(NSTimeInterval)d options:(UIViewAnimationOptions)o completion:(void(^)(BOOL))c {
+    [self as_UIView_transitionFromView:fv toView:tv duration:_scaleInterval(d,_effectiveFactor()) options:o completion:c];
+}
 
-@interface UIViewPropertyAnimator (ASTweak)
-@end
-@implementation UIViewPropertyAnimator (ASTweak)
-- (instancetype)as_initWithDuration:(NSTimeInterval)d timingParameters:(id)p {
+// UIViewPropertyAnimator
+- (instancetype)as_UIPA_initDuration:(NSTimeInterval)d timingParameters:(id)p {
+    return [self as_UIPA_initDuration:_scaleInterval(d,_effectiveFactor()) timingParameters:p];
+}
+- (instancetype)as_UIPA_initDuration:(NSTimeInterval)d dampingRatio:(CGFloat)r animations:(void(^)(void))a {
+    return [self as_UIPA_initDuration:_scaleInterval(d,_effectiveFactor()) dampingRatio:r animations:a];
+}
+- (void)as_UIPA_setDuration:(NSTimeInterval)d {
+    [self as_UIPA_setDuration:_scaleInterval(d,_effectiveFactor())];
+}
+
+// UIScrollView
+- (void)as_UISV_setContentOffset:(CGPoint)o animated:(BOOL)an {
+    if (!an) { [self as_UISV_setContentOffset:o animated:an]; return; }
     double f=_effectiveFactor();
-    if (!gCatSprings) return [self as_initWithDuration:d timingParameters:p];
-    return [self as_initWithDuration:_scaleInterval(d,f) timingParameters:p];
+    [UIView animateWithDuration:_scaleInterval(0.25,f) delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{ [self as_UISV_setContentOffset:o animated:NO]; } completion:nil];
 }
-- (instancetype)as_initWithDuration:(NSTimeInterval)d dampingRatio:(CGFloat)r animations:(void(^)(void))a {
+- (void)as_UISV_scrollRectToVisible:(CGRect)r animated:(BOOL)an {
+    if (!an) { [self as_UISV_scrollRectToVisible:r animated:an]; return; }
     double f=_effectiveFactor();
-    if (!gCatSprings) return [self as_initWithDuration:d dampingRatio:r animations:a];
-    return [self as_initWithDuration:_scaleInterval(d,f) dampingRatio:r animations:a];
+    [UIView animateWithDuration:_scaleInterval(0.25,f) delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{ [self as_UISV_scrollRectToVisible:r animated:NO]; } completion:nil];
 }
-- (void)as_setDuration:(NSTimeInterval)d {
+
+// UINavigationController push/pop
+- (void)as_Nav_pushViewController:(UIViewController*)vc animated:(BOOL)an {
+    if (!an) { [self as_Nav_pushViewController:vc animated:an]; return; }
     double f=_effectiveFactor();
-    if (!gCatSprings) { [self as_setDuration:d]; return; }
-    [self as_setDuration:_scaleInterval(d,f)];
+    [UIView animateWithDuration:_scaleVC(0.35,f,50) delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{ [self as_Nav_pushViewController:vc animated:NO]; } completion:nil];
 }
-+ (void)as_runningPropertyAnimatorWithDuration:(NSTimeInterval)d delay:(NSTimeInterval)dl options:(UIViewAnimationOptions)o animations:(void(^)(void))a completion:(void(^)(UIViewAnimatingPosition))c {
+- (UIViewController*)as_Nav_popViewControllerAnimated:(BOOL)an {
+    if (!an) return [self as_Nav_popViewControllerAnimated:an];
+    double f=_effectiveFactor(); __block UIViewController *result=nil;
+    [UIView animateWithDuration:_scaleVC(0.35,f,50) delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{ result=[self as_Nav_popViewControllerAnimated:NO]; } completion:nil];
+    return result;
+}
+- (NSArray<UIViewController*>*)as_Nav_popToViewController:(UIViewController*)vc animated:(BOOL)an {
+    if (!an) return [self as_Nav_popToViewController:vc animated:an];
+    double f=_effectiveFactor(); __block NSArray *result=nil;
+    [UIView animateWithDuration:_scaleVC(0.35,f,50) delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{ result=[self as_Nav_popToViewController:vc animated:NO]; } completion:nil];
+    return result;
+}
+- (NSArray<UIViewController*>*)as_Nav_popToRootViewControllerAnimated:(BOOL)an {
+    if (!an) return [self as_Nav_popToRootViewControllerAnimated:an];
+    double f=_effectiveFactor(); __block NSArray *result=nil;
+    [UIView animateWithDuration:_scaleVC(0.35,f,50) delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{ result=[self as_Nav_popToRootViewControllerAnimated:NO]; } completion:nil];
+    return result;
+}
+
+// UITabBarController
+- (void)as_Tab_setSelectedIndex:(NSUInteger)i {
     double f=_effectiveFactor();
-    if (!gCatSprings) { [self as_runningPropertyAnimatorWithDuration:d delay:dl options:o animations:a completion:c]; return; }
-    [self as_runningPropertyAnimatorWithDuration:_scaleInterval(d,f) delay:_scaleInterval(dl,f) options:o animations:a completion:c];
+    [UIView animateWithDuration:_scaleVC(0.25,f,50) delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{ [self as_Tab_setSelectedIndex:i]; } completion:nil];
 }
+
+// UIViewController present/dismiss
+- (void)as_VC_presentViewController:(UIViewController*)vc animated:(BOOL)an completion:(void(^)(void))c {
+    if (!an) { [self as_VC_presentViewController:vc animated:an completion:c]; return; }
+    double f=_effectiveFactor();
+    [UIView animateWithDuration:_scaleVC(0.35,f,50) delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{ [self as_VC_presentViewController:vc animated:NO completion:c]; } completion:nil];
+}
+- (void)as_VC_dismissViewControllerAnimated:(BOOL)an completion:(void(^)(void))c {
+    if (!an) { [self as_VC_dismissViewControllerAnimated:an completion:c]; return; }
+    double f=_effectiveFactor();
+    [UIView animateWithDuration:_scaleVC(0.35,f,50) delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{ [self as_VC_dismissViewControllerAnimated:NO completion:c]; } completion:nil];
+}
+
+// CATransaction setAnimationDuration（类方法）
++ (void)as_CATrans_setDuration:(CFTimeInterval)d {
+    [self as_CATrans_setDuration:_scaleVC(d,_effectiveFactor(),16)];
+}
+
+// CAPropertyAnimation setDuration（类方法，v6_fix 验证正确）
++ (void)as_CAProp_setDuration:(CFTimeInterval)d {
+    [self as_CAProp_setDuration:_scaleVC(d,_effectiveFactor(),16)];
+}
+
 @end
 
-// MARK: - UIScrollView
+// MARK: - 激进 hook 方法（仅非 safe profile 安装）
 
-@interface UIScrollView (ASTweak)
+@interface CALayer (ASTweak_Risky)
 @end
-@implementation UIScrollView (ASTweak)
-- (void)as_setContentOffset:(CGPoint)o animated:(BOOL)an {
-    if (!an || !gCatScroll) { [self as_setContentOffset:o animated:an]; return; }
-    double f=_effectiveFactor();
-    [CATransaction begin]; [CATransaction setAnimationDuration:f<=0?0:f];
-    [self as_setContentOffset:o animated:YES];
-    [CATransaction commit];
-}
-- (void)as_scrollRectToVisible:(CGRect)r animated:(BOOL)an {
-    if (!an || !gCatScroll) { [self as_scrollRectToVisible:r animated:an]; return; }
-    double f=_effectiveFactor();
-    [CATransaction begin]; [CATransaction setAnimationDuration:f<=0?0:f];
-    [self as_scrollRectToVisible:r animated:YES];
-    [CATransaction commit];
-}
-@end
-
-// MARK: - UINavigationController
-
-@interface UINavigationController (ASTweak)
-@end
-@implementation UINavigationController (ASTweak)
-- (void)as_pushViewController:(UIViewController*)vc animated:(BOOL)an {
-    if (!an || !gCatTransitions) { [self as_pushViewController:vc animated:an]; return; }
-    double f=_effectiveFactor();
-    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
-    [self as_pushViewController:vc animated:YES];
-    [CATransaction commit];
-}
-- (UIViewController*)as_popViewControllerAnimated:(BOOL)an {
-    if (!an || !gCatTransitions) return [self as_popViewControllerAnimated:an];
-    double f=_effectiveFactor();
-    __block UIViewController *ret;
-    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
-    ret = [self as_popViewControllerAnimated:YES];
-    [CATransaction commit];
-    return ret;
-}
-- (void)as_setViewControllers:(NSArray<UIViewController*>*)vcs animated:(BOOL)an {
-    if (!an || !gCatTransitions) { [self as_setViewControllers:vcs animated:an]; return; }
-    double f=_effectiveFactor();
-    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
-    [self as_setViewControllers:vcs animated:YES];
-    [CATransaction commit];
-}
-- (NSArray<UIViewController*>*)as_popToViewController:(UIViewController*)vc animated:(BOOL)an {
-    if (!an || !gCatTransitions) return [self as_popToViewController:vc animated:an];
-    double f=_effectiveFactor();
-    NSArray *ret;
-    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
-    ret = [self as_popToViewController:vc animated:YES];
-    [CATransaction commit];
-    return ret;
-}
-- (NSArray<UIViewController*>*)as_popToRootViewControllerAnimated:(BOOL)an {
-    if (!an || !gCatTransitions) return [self as_popToRootViewControllerAnimated:an];
-    double f=_effectiveFactor();
-    NSArray *ret;
-    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
-    ret = [self as_popToRootViewControllerAnimated:YES];
-    [CATransaction commit];
-    return ret;
-}
-@end
-
-// MARK: - UITabBarController
-
-@interface UITabBarController (ASTweak)
-@end
-@implementation UITabBarController (ASTweak)
-- (void)as_setSelectedIndex:(NSUInteger)i {
-    if (!gCatTransitions) { [self as_setSelectedIndex:i]; return; }
-    double f=_effectiveFactor();
-    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
-    [self as_setSelectedIndex:i];
-    [CATransaction commit];
-}
-- (void)as_setSelectedViewController:(UIViewController*)vc {
-    if (!gCatTransitions) { [self as_setSelectedViewController:vc]; return; }
-    double f=_effectiveFactor();
-    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
-    [self as_setSelectedViewController:vc];
-    [CATransaction commit];
-}
-@end
-
-// MARK: - UIViewController
-
-@interface UIViewController (ASTweak)
-@end
-@implementation UIViewController (ASTweak)
-- (void)as_presentViewController:(UIViewController*)vc animated:(BOOL)an completion:(void(^)(void))c {
-    if (!an || !gCatTransitions) { [self as_presentViewController:vc animated:an completion:c]; return; }
-    double f = _effectiveFactor();
-    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
-    [self as_presentViewController:vc animated:YES completion:c];
-    [CATransaction commit];
-}
-- (void)as_dismissViewControllerAnimated:(BOOL)an completion:(void(^)(void))c {
-    if (!an || !gCatTransitions) { [self as_dismissViewControllerAnimated:an completion:c]; return; }
-    double f=_effectiveFactor();
-    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
-    [self as_dismissViewControllerAnimated:YES completion:c];
-    [CATransaction commit];
-}
-@end
-
-// MARK: - CAPropertyAnimation（覆盖 CABasic/CAKeyframe/CASpring）
-
-@interface CAPropertyAnimation (ASTweak)
-@end
-@implementation CAPropertyAnimation (ASTweak)
-- (void)as_setDuration:(CFTimeInterval)d {
-    double f=_effectiveFactor();
-    BOOL spring = [self isKindOfClass:[CASpringAnimation class]];
-    if (spring && !gCatSprings) { [self as_setDuration:d]; return; }
-    if (!gCatLayers && !spring) { [self as_setDuration:d]; return; }
-    [self as_setDuration:_scaleCF(d,f)];
-}
-@end
-
-// MARK: - CALayer (隐式动画)
-
-@interface CALayer (ASTweak)
-@end
-@implementation CALayer (ASTweak)
-- (id)as_actionForKey:(NSString*)key {
-    id action = [self as_actionForKey:key];
-    if (!gCatLayers) return action;
-    if ([action isKindOfClass:[CAPropertyAnimation class]]) {
-        double f=_effectiveFactor();
-        CAPropertyAnimation *pa = (CAPropertyAnimation*)action;
-        [pa as_setDuration:_scaleCF([pa duration], f)];
+@implementation CALayer (ASTweak_Risky)
+- (id)as_CALayer_actionForKey:(NSString*)key {
+    id action = [self as_CALayer_actionForKey:key];
+    if ([action isKindOfClass:[CAAnimation class]]) {
+        [(CAAnimation*)action as_CAProp_setDuration:_scaleVC([(CAAnimation*)action duration], _effectiveFactor(), 20)];
     }
     return action;
 }
 @end
 
-// MARK: - UIDynamicAnimator
-
-@interface UIDynamicAnimator (ASTweak)
+@interface UIDynamicAnimator (ASTweak_Risky)
 @end
-@implementation UIDynamicAnimator (ASTweak)
-- (void)as_addBehavior:(UIDynamicBehavior*)b {
+@implementation UIDynamicAnimator (ASTweak_Risky)
+- (void)as_UIDy_addBehavior:(UIDynamicBehavior*)b {
     if (gInstantMode) return;
-    [self as_addBehavior:b];
+    [self as_UIDy_addBehavior:b];
 }
 @end
 
-// MARK: - UIPresentationController (自定义全屏转场 / 弹层 / 菜单 / 表单)
-
-@interface UIPresentationController (ASTweak)
-@end
-@implementation UIPresentationController (ASTweak)
-- (void)as_presentWithAnimated:(BOOL)an completion:(void(^)(void))c {
-    if (!an || !gCatTransitions) { [self as_presentWithAnimated:an completion:c]; return; }
-    double f=_effectiveFactor();
-    // 关键修复：原先用原始 f(≈0) 覆盖了 presentViewController 的 50ms 保护，
-    // 导致点击触发的弹层/菜单/表单瞬间完成 → 状态机闪退。改为统一转场保底。
-    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
-    [self as_presentWithAnimated:YES completion:c];
-    [CATransaction commit];
-}
-- (void)as_dismissWithAnimated:(BOOL)an completion:(void(^)(void))c {
-    if (!an || !gCatTransitions) { [self as_dismissWithAnimated:an completion:c]; return; }
-    double f=_effectiveFactor();
-    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
-    [self as_dismissWithAnimated:YES completion:c];
-    [CATransaction commit];
-}
-@end
-
-// MARK: - UIWindow
-
-@interface UIWindow (ASTweak)
-@end
-@implementation UIWindow (ASTweak)
-+ (void)as_setAnimationDuration:(CFTimeInterval)d {
-    double f=_effectiveFactor();
-    [self as_setAnimationDuration:_scaleCF(d,f)];
-}
-@end
-
-// MARK: - UIPageViewController
-
-@interface UIPageViewController (ASTweak)
-@end
-@implementation UIPageViewController (ASTweak)
-- (void)as_setViewControllers:(NSArray*)vcs direction:(UIPageViewControllerNavigationDirection)dir animated:(BOOL)an completion:(void(^)(BOOL))c {
-    if (!an || !gCatTransitions) { [self as_setViewControllers:vcs direction:dir animated:an completion:c]; return; }
-    double f=_effectiveFactor();
-    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
-    [self as_setViewControllers:vcs direction:dir animated:YES completion:c];
-    [CATransaction commit];
-}
-@end
-
-// MARK: - UIDocumentBrowserViewController
-
-@interface UIDocumentBrowserViewController (ASTweak)
-@end
-@implementation UIDocumentBrowserViewController (ASTweak)
-- (void)as_presentDocumentAtURL:(NSURL*)url options:(NSDictionary*)opts animated:(BOOL)an completion:(void(^)(UIViewController * _Nullable, NSError * _Nullable, UIViewController * _Nullable))c {
-    if (!an || !gCatTransitions) { [self as_presentDocumentAtURL:url options:opts animated:an completion:c]; return; }
-    double f=_effectiveFactor();
-    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
-    [self as_presentDocumentAtURL:url options:opts animated:YES completion:c];
-    [CATransaction commit];
-}
-@end
-
-// MARK: - 全部 swizzle
+// MARK: - _install（bundle-aware）
 
 static void _install(void) {
-    Class UIView_cls  = objc_getClass("UIView");
-    Class CATx_cls    = objc_getClass("CATransaction");
-    Class UIPA_cls    = objc_getClass("UIViewPropertyAnimator");
-    Class UISV_cls    = objc_getClass("UIScrollView");
-    Class UINC_cls    = objc_getClass("UINavigationController");
-    Class UITB_cls    = objc_getClass("UITabBarController");
-    Class UIVC_cls    = objc_getClass("UIViewController");
-    Class CAAN_cls    = objc_getClass("CAPropertyAnimation");
-    Class CALR_cls    = objc_getClass("CALayer");
-    Class UIDy_cls    = objc_getClass("UIDynamicAnimator");
+    int ok=0, total=0;
+    double f = _effectiveFactor();
+    NSLog(@"[AnimationSpeedTweak v3.4] bid=%@ safe=%d factor=%.4f", NSBundle.mainBundle.bundleIdentifier, gSafeProfile, f);
 
-    swizzleClass(UIView_cls, @selector(animateWithDuration:animations:), @selector(as_animateWithDuration:animations:));
-    swizzleClass(UIView_cls, @selector(animateWithDuration:animations:completion:), @selector(as_animateWithDuration:animations:completion:));
-    swizzleClass(UIView_cls, @selector(animateWithDuration:delay:options:animations:completion:), @selector(as_animateWithDuration:delay:options:animations:completion:));
-    swizzleClass(UIView_cls, @selector(animateWithDuration:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:), @selector(as_animateWithDuration:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:));
-    swizzleClass(UIView_cls, @selector(transitionWithView:duration:options:animations:completion:), @selector(as_transitionWithView:duration:options:animations:completion:));
-    swizzleClass(UIView_cls, @selector(transitionFromView:toView:duration:options:completion:), @selector(as_transitionFromView:toView:duration:options:completion:));
+    // ─── 通用安全 hook（无论哪个 profile 都装）───────────────────────────
+    Class UIView_cls = [UIView class];
+    total += 6;
+    ok += _swizzleClass(UIView_cls, @selector(animateWithDuration:animations:),
+                        @selector(as_UIView_animate:animations:));
+    ok += _swizzleClass(UIView_cls, @selector(animateWithDuration:animations:completion:),
+                        @selector(as_UIView_animate:animations:completion:));
+    ok += _swizzleClass(UIView_cls, @selector(animateWithDuration:delay:options:animations:completion:),
+                        @selector(as_UIView_animate:delay:options:animations:completion:));
+    ok += _swizzleClass(UIView_cls, @selector(animateWithDuration:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:),
+                        @selector(as_UIView_animate:delay:options:animations:completion:));
+    ok += _swizzleClass(UIView_cls, @selector(transitionWithView:duration:options:animations:completion:),
+                        @selector(as_UIView_transitionWithView:duration:options:animations:completion:));
+    ok += _swizzleClass(UIView_cls, @selector(transitionFromView:toView:duration:options:completion:),
+                        @selector(as_UIView_transitionFromView:toView:duration:options:completion:));
 
-    if (CATx_cls) {
-        Class meta = objc_getMetaClass("CATransaction");
-        if (meta) {
-            Method m = class_getClassMethod(meta, @selector(setAnimationDuration:));
-            if (m) {
-                if (!class_addMethod(meta, @selector(as_setAnimationDuration:), method_getImplementation(m), method_getTypeEncoding(m))) {
-                    // Already has as_ version, just exchange
-                }
-                Method m2 = class_getClassMethod(meta, @selector(as_setAnimationDuration:));
-                if (m2) method_exchangeImplementations(m, m2);
-            }
-        }
-    }
+    Class UIPA_cls = [UIViewPropertyAnimator class];
+    total += 3;
+    ok += _swizzleInstance(UIPA_cls, @selector(initWithDuration:timingParameters:),
+                           @selector(as_UIPA_initDuration:timingParameters:));
+    ok += _swizzleInstance(UIPA_cls, @selector(initWithDuration:dampingRatio:animations:),
+                           @selector(as_UIPA_initDuration:dampingRatio:animations:));
+    ok += _swizzleInstance(UIPA_cls, @selector(setDuration:),
+                           @selector(as_UIPA_setDuration:));
 
-    swizzleInstance(UIPA_cls, @selector(initWithDuration:timingParameters:), @selector(as_initWithDuration:timingParameters:));
-    swizzleInstance(UIPA_cls, @selector(initWithDuration:dampingRatio:animations:), @selector(as_initWithDuration:dampingRatio:animations:));
-    swizzleInstance(UIPA_cls, @selector(setDuration:), @selector(as_setDuration:));
-    swizzleClass(UIPA_cls, @selector(runningPropertyAnimatorWithDuration:delay:options:animations:completion:), @selector(as_runningPropertyAnimatorWithDuration:delay:options:animations:completion:));
+    Class UISV_cls = [UIScrollView class];
+    total += 2;
+    ok += _swizzleInstance(UISV_cls, @selector(setContentOffset:animated:),
+                           @selector(as_UISV_setContentOffset:animated:));
+    ok += _swizzleInstance(UISV_cls, @selector(scrollRectToVisible:animated:),
+                           @selector(as_UISV_scrollRectToVisible:animated:));
 
-    swizzleInstance(UISV_cls, @selector(setContentOffset:animated:), @selector(as_setContentOffset:animated:));
-    swizzleInstance(UISV_cls, @selector(scrollRectToVisible:animated:), @selector(as_scrollRectToVisible:animated:));
+    Class Nav_cls = [UINavigationController class];
+    total += 4;
+    ok += _swizzleInstance(Nav_cls, @selector(pushViewController:animated:),
+                           @selector(as_Nav_pushViewController:animated:));
+    ok += _swizzleInstance(Nav_cls, @selector(popViewControllerAnimated:),
+                           @selector(as_Nav_popViewControllerAnimated:));
+    ok += _swizzleInstance(Nav_cls, @selector(popToViewController:animated:),
+                           @selector(as_Nav_popToViewController:animated:));
+    ok += _swizzleInstance(Nav_cls, @selector(popToRootViewControllerAnimated:),
+                           @selector(as_Nav_popToRootViewControllerAnimated:));
 
-    swizzleInstance(UINC_cls, @selector(pushViewController:animated:), @selector(as_pushViewController:animated:));
-    swizzleInstance(UINC_cls, @selector(popViewControllerAnimated:), @selector(as_popViewControllerAnimated:));
-    swizzleInstance(UINC_cls, @selector(setViewControllers:animated:), @selector(as_setViewControllers:animated:));
-    swizzleInstance(UINC_cls, @selector(popToViewController:animated:), @selector(as_popToViewController:animated:));
-    swizzleInstance(UINC_cls, @selector(popToRootViewControllerAnimated:), @selector(as_popToRootViewControllerAnimated:));
+    Class Tab_cls = [UITabBarController class];
+    total += 1;
+    ok += _swizzleInstance(Tab_cls, @selector(setSelectedIndex:),
+                           @selector(as_Tab_setSelectedIndex:));
 
-    swizzleInstance(UITB_cls, @selector(setSelectedIndex:), @selector(as_setSelectedIndex:));
-    swizzleInstance(UITB_cls, @selector(setSelectedViewController:), @selector(as_setSelectedViewController:));
+    Class VC_cls = [UIViewController class];
+    total += 2;
+    ok += _swizzleInstance(VC_cls, @selector(presentViewController:animated:completion:),
+                           @selector(as_VC_presentViewController:animated:completion:));
+    ok += _swizzleInstance(VC_cls, @selector(dismissViewControllerAnimated:completion:),
+                           @selector(as_VC_dismissViewControllerAnimated:completion:));
 
-    swizzleInstance(UIVC_cls, @selector(presentViewController:animated:completion:), @selector(as_presentViewController:animated:completion:));
-    swizzleInstance(UIVC_cls, @selector(dismissViewControllerAnimated:completion:), @selector(as_dismissViewControllerAnimated:completion:));
+    total += 2;
+    ok += _swizzleClass([CATransaction class], @selector(setAnimationDuration:),
+                        @selector(as_CATrans_setDuration:));
+    // CAPropertyAnimation setDuration 是类方法！用 _swizzleClass（v6_fix 验证正确）
+    ok += _swizzleClass([CAPropertyAnimation class], @selector(setDuration:),
+                        @selector(as_CAProp_setDuration:));
 
-    swizzleInstance(CAAN_cls, @selector(setDuration:), @selector(as_setDuration:));
+    NSLog(@"[AnimationSpeedTweak v3.4] installed safe hooks %d/%d", ok, total);
 
-    // 以下为"激进" hook：只对非敏感 App 安装。微信等走安全集（= 已验证不闪退的 v6 窄覆盖）。
+    // ─── 激进 hook（仅非 safe profile）────────────────────────────────
     if (!gSafeProfile) {
-        swizzleInstance(CALR_cls, @selector(actionForKey:), @selector(as_actionForKey:));
-        swizzleInstance(UIDy_cls, @selector(addBehavior:), @selector(as_addBehavior:));
-
-        Class UIPrc_cls = objc_getClass("UIPresentationController");
-        Class UIWin_cls = objc_getClass("UIWindow");
-        Class UIPG_cls  = objc_getClass("UIPageViewController");
-        Class UIDoc_cls = objc_getClass("UIDocumentBrowserViewController");
-        swizzleInstance(UIPrc_cls, @selector(presentWithAnimated:completion:), @selector(as_presentWithAnimated:completion:));
-        swizzleInstance(UIPrc_cls, @selector(dismissWithAnimated:completion:), @selector(as_dismissWithAnimated:completion:));
-        swizzleClass(UIWin_cls, @selector(setAnimationDuration:), @selector(as_setAnimationDuration:));
-        swizzleInstance(UIPG_cls, @selector(setViewControllers:direction:animated:completion:), @selector(as_setViewControllers:direction:animated:completion:));
-        swizzleInstance(UIDoc_cls, @selector(presentDocumentAtURL:options:animated:completion:), @selector(as_presentDocumentAtURL:options:animated:completion:));
+        int ok2=0, total2=0;
+        Class CALR_cls = [CALayer class];
+        total2++;
+        ok2 += _swizzleInstance(CALR_cls, @selector(actionForKey:),
+                                @selector(as_CALayer_actionForKey:));
+        Class UIDy_cls = [UIDynamicAnimator class];
+        total2++;
+        ok2 += _swizzleInstance(UIDy_cls, @selector(addBehavior:),
+                                @selector(as_UIDy_addBehavior:));
+        NSLog(@"[AnimationSpeedTweak v3.4] installed risky hooks %d/%d", ok2, total2);
     }
+
+    // HUD 横幅（延迟 1s 显示，确认注入成功）
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIWindow *win = UIApplication.sharedApplication.keyWindow;
+        if (!win) return;
+        UIView *bar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, win.bounds.size.width, 24)];
+        bar.backgroundColor = [UIColor colorWithRed:0 green:0.5 blue:1 alpha:0.85];
+        bar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+        UILabel *lbl = [[UILabel alloc] initWithFrame:bar.bounds];
+        lbl.text = [NSString stringWithFormat:@"AnimationSpeed %@ factor=%.4f",
+                    gSafeProfile ? @"SAFE" : @"BROAD", _effectiveFactor()];
+        lbl.textColor = [UIColor whiteColor]; lbl.font = [UIFont systemFontOfSize:12];
+        lbl.textAlignment = NSTextAlignmentCenter;
+        [bar addSubview:lbl]; [win addSubview:bar];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [bar removeFromSuperview]; });
+    });
 }
 
 // MARK: - 构造器
@@ -479,25 +339,19 @@ static void _install(void) {
 __attribute__((constructor))
 static void _astweak_init(void) {
     @autoreleasepool {
-        gBlacklist = [NSMutableSet set];
-        gPerApp = [NSMutableDictionary dictionary];
-
-        // 按宿主 App 识别：微信/企业微信等敏感 App 走"安全 hook 集"，避免激进 hook 致闪退
         NSString *bid = NSBundle.mainBundle.bundleIdentifier ?: @"";
         if ([bid isEqualToString:@"com.tencent.xin"] ||
             [bid hasPrefix:@"com.tencent.xin"] ||
             [bid isEqualToString:@"com.tencent.wework"] ||
             [bid hasPrefix:@"com.tencent.wework"]) {
             gSafeProfile    = YES;
-            gFactor         = gWeChatFactor;   // 0.001（v6 实测稳定）
-            gMinPageAnimSec = 0.050;           // 转场保底 50ms
-            gMinViewAnimSec = 0.016;           // 视图动画保底 1 帧
-            gMinCALayerSec  = 0.020;           // 内部 CA 动画保底 20ms
+            gFactor         = gWeChatFactor;  // 0.001，v6 实测稳定
+            gMinPageAnimSec = 0.050;
+            gMinViewAnimSec = 0.016;
+            gMinCALayerSec  = 0.020;
         }
-
-        _reloadConfigIfNeeded();
         _install();
-        NSLog(@"[AnimationSpeedTweak v3.3] bid=%@ safe=%d factor=%.3f pageMin=%.0fms viewMin=%.0fms instant=%d",
-              bid, gSafeProfile, gFactor, gMinPageAnimSec*1000, gMinViewAnimSec*1000, gInstantMode);
+        NSLog(@"[AnimationSpeedTweak v3.4] ready bid=%@ safe=%d factor=%.4f minPage=%.0fms",
+              bid, gSafeProfile, gFactor, gMinPageAnimSec*1000);
     }
 }
