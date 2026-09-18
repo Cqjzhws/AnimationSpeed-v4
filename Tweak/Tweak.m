@@ -5,7 +5,7 @@
 // 全局配置
 // ================================
 static double gFactor = 0.001;
-static BOOL gInstantMode = NO;
+static BOOL gInstantMode = YES; // 瞬时模式：所有 UIView/CA 动画时长压为 0
 
 // ================================
 // 核心加速逻辑
@@ -341,7 +341,8 @@ static void _astweak_install(void) {
             if (!win) win = UIApplication.sharedApplication.windows.firstObject;
             if (!win) return;
             UILabel *hud = [[UILabel alloc] initWithFrame:CGRectZero];
-            hud.text = [NSString stringWithFormat:@"AnimationSpeed v6  %d/%d  f=%.4f", ok, total, gFactor];
+            NSString *mode = gInstantMode ? @"INSTANT" : [NSString stringWithFormat:@"%.4f", gFactor];
+            hud.text = [NSString stringWithFormat:@"AnimationSpeed  %d/%d  %@", ok, total, mode];
             hud.textAlignment = NSTextAlignmentCenter;
             hud.textColor = [UIColor whiteColor];
             hud.font = [UIFont boldSystemFontOfSize:13];
