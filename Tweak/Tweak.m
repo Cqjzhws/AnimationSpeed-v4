@@ -13,7 +13,9 @@
 
 // MARK: - 全局状态
 
-static double gFactor          = 0.010;  // 广覆盖 v3.2：factor=0.01
+static double gFactor          = 0.010;  // 广覆盖 v3.3：factor=0.01（非微信 App）
+static double gWeChatFactor    = 0.001;  // 微信安全档：窄覆盖 + 0.001（v6 实测稳定）
+static BOOL   gSafeProfile     = NO;     // YES=微信等敏感 App：只装安全 hook 集
 static double gMinDurationMs   = 0.0;  // 0=不保护
 // 最小动画保障：视图控制器转场不能太快，否则状态机错乱闪退（微信实测 50ms 安全）
 static double gMinPageAnimSec  = 0.050;  // present/push/pop/dismiss/弹层 跳转最小 50ms
@@ -232,6 +234,24 @@ static void swizzleClass(Class cls, SEL orig, SEL repl) {
     [self as_setViewControllers:vcs animated:YES];
     [CATransaction commit];
 }
+- (NSArray<UIViewController*>*)as_popToViewController:(UIViewController*)vc animated:(BOOL)an {
+    if (!an || !gCatTransitions) return [self as_popToViewController:vc animated:an];
+    double f=_effectiveFactor();
+    NSArray *ret;
+    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
+    ret = [self as_popToViewController:vc animated:YES];
+    [CATransaction commit];
+    return ret;
+}
+- (NSArray<UIViewController*>*)as_popToRootViewControllerAnimated:(BOOL)an {
+    if (!an || !gCatTransitions) return [self as_popToRootViewControllerAnimated:an];
+    double f=_effectiveFactor();
+    NSArray *ret;
+    [CATransaction begin]; [CATransaction setAnimationDuration:_pageF(f)];
+    ret = [self as_popToRootViewControllerAnimated:YES];
+    [CATransaction commit];
+    return ret;
+}
 @end
 
 // MARK: - UITabBarController
@@ -276,11 +296,11 @@ static void swizzleClass(Class cls, SEL orig, SEL repl) {
 }
 @end
 
-// MARK: - CAAnimation
+// MARK: - CAPropertyAnimation（覆盖 CABasic/CAKeyframe/CASpring）
 
-@interface CAAnimation (ASTweak)
+@interface CAPropertyAnimation (ASTweak)
 @end
-@implementation CAAnimation (ASTweak)
+@implementation CAPropertyAnimation (ASTweak)
 - (void)as_setDuration:(CFTimeInterval)d {
     double f=_effectiveFactor();
     BOOL spring = [self isKindOfClass:[CASpringAnimation class]];
@@ -298,9 +318,10 @@ static void swizzleClass(Class cls, SEL orig, SEL repl) {
 - (id)as_actionForKey:(NSString*)key {
     id action = [self as_actionForKey:key];
     if (!gCatLayers) return action;
-    if ([action isKindOfClass:[CAAnimation class]]) {
+    if ([action isKindOfClass:[CAPropertyAnimation class]]) {
         double f=_effectiveFactor();
-        [(CAAnimation*)action as_setDuration:_scaleCF([(CAAnimation*)action duration], f)];
+        CAPropertyAnimation *pa = (CAPropertyAnimation*)action;
+        [pa as_setDuration:_scaleCF([pa duration], f)];
     }
     return action;
 }
@@ -389,7 +410,7 @@ static void _install(void) {
     Class UINC_cls    = objc_getClass("UINavigationController");
     Class UITB_cls    = objc_getClass("UITabBarController");
     Class UIVC_cls    = objc_getClass("UIViewController");
-    Class CAAN_cls    = objc_getClass("CAAnimation");
+    Class CAAN_cls    = objc_getClass("CAPropertyAnimation");
     Class CALR_cls    = objc_getClass("CALayer");
     Class UIDy_cls    = objc_getClass("UIDynamicAnimator");
 
@@ -425,6 +446,8 @@ static void _install(void) {
     swizzleInstance(UINC_cls, @selector(pushViewController:animated:), @selector(as_pushViewController:animated:));
     swizzleInstance(UINC_cls, @selector(popViewControllerAnimated:), @selector(as_popViewControllerAnimated:));
     swizzleInstance(UINC_cls, @selector(setViewControllers:animated:), @selector(as_setViewControllers:animated:));
+    swizzleInstance(UINC_cls, @selector(popToViewController:animated:), @selector(as_popToViewController:animated:));
+    swizzleInstance(UINC_cls, @selector(popToRootViewControllerAnimated:), @selector(as_popToRootViewControllerAnimated:));
 
     swizzleInstance(UITB_cls, @selector(setSelectedIndex:), @selector(as_setSelectedIndex:));
     swizzleInstance(UITB_cls, @selector(setSelectedViewController:), @selector(as_setSelectedViewController:));
@@ -433,18 +456,22 @@ static void _install(void) {
     swizzleInstance(UIVC_cls, @selector(dismissViewControllerAnimated:completion:), @selector(as_dismissViewControllerAnimated:completion:));
 
     swizzleInstance(CAAN_cls, @selector(setDuration:), @selector(as_setDuration:));
-    swizzleInstance(CALR_cls, @selector(actionForKey:), @selector(as_actionForKey:));
-    swizzleInstance(UIDy_cls, @selector(addBehavior:), @selector(as_addBehavior:));
 
-    Class UIPrc_cls = objc_getClass("UIPresentationController");
-    Class UIWin_cls = objc_getClass("UIWindow");
-    Class UIPG_cls  = objc_getClass("UIPageViewController");
-    Class UIDoc_cls = objc_getClass("UIDocumentBrowserViewController");
-    swizzleInstance(UIPrc_cls, @selector(presentWithAnimated:completion:), @selector(as_presentWithAnimated:completion:));
-    swizzleInstance(UIPrc_cls, @selector(dismissWithAnimated:completion:), @selector(as_dismissWithAnimated:completion:));
-    swizzleClass(UIWin_cls, @selector(setAnimationDuration:), @selector(as_setAnimationDuration:));
-    swizzleInstance(UIPG_cls, @selector(setViewControllers:direction:animated:completion:), @selector(as_setViewControllers:direction:animated:completion:));
-    swizzleInstance(UIDoc_cls, @selector(presentDocumentAtURL:options:animated:completion:), @selector(as_presentDocumentAtURL:options:animated:completion:));
+    // 以下为"激进" hook：只对非敏感 App 安装。微信等走安全集（= 已验证不闪退的 v6 窄覆盖）。
+    if (!gSafeProfile) {
+        swizzleInstance(CALR_cls, @selector(actionForKey:), @selector(as_actionForKey:));
+        swizzleInstance(UIDy_cls, @selector(addBehavior:), @selector(as_addBehavior:));
+
+        Class UIPrc_cls = objc_getClass("UIPresentationController");
+        Class UIWin_cls = objc_getClass("UIWindow");
+        Class UIPG_cls  = objc_getClass("UIPageViewController");
+        Class UIDoc_cls = objc_getClass("UIDocumentBrowserViewController");
+        swizzleInstance(UIPrc_cls, @selector(presentWithAnimated:completion:), @selector(as_presentWithAnimated:completion:));
+        swizzleInstance(UIPrc_cls, @selector(dismissWithAnimated:completion:), @selector(as_dismissWithAnimated:completion:));
+        swizzleClass(UIWin_cls, @selector(setAnimationDuration:), @selector(as_setAnimationDuration:));
+        swizzleInstance(UIPG_cls, @selector(setViewControllers:direction:animated:completion:), @selector(as_setViewControllers:direction:animated:completion:));
+        swizzleInstance(UIDoc_cls, @selector(presentDocumentAtURL:options:animated:completion:), @selector(as_presentDocumentAtURL:options:animated:completion:));
+    }
 }
 
 // MARK: - 构造器
@@ -454,9 +481,23 @@ static void _astweak_init(void) {
     @autoreleasepool {
         gBlacklist = [NSMutableSet set];
         gPerApp = [NSMutableDictionary dictionary];
+
+        // 按宿主 App 识别：微信/企业微信等敏感 App 走"安全 hook 集"，避免激进 hook 致闪退
+        NSString *bid = NSBundle.mainBundle.bundleIdentifier ?: @"";
+        if ([bid isEqualToString:@"com.tencent.xin"] ||
+            [bid hasPrefix:@"com.tencent.xin"] ||
+            [bid isEqualToString:@"com.tencent.wework"] ||
+            [bid hasPrefix:@"com.tencent.wework"]) {
+            gSafeProfile    = YES;
+            gFactor         = gWeChatFactor;   // 0.001（v6 实测稳定）
+            gMinPageAnimSec = 0.050;           // 转场保底 50ms
+            gMinViewAnimSec = 0.016;           // 视图动画保底 1 帧
+            gMinCALayerSec  = 0.020;           // 内部 CA 动画保底 20ms
+        }
+
         _reloadConfigIfNeeded();
         _install();
-        NSLog(@"[AnimationSpeedTweak v3.1] injected factor=%.3f pageMin=%.0fms viewMin=%.0fms instant=%d",
-              gFactor, gMinPageAnimSec*1000, gMinViewAnimSec*1000, gInstantMode);
+        NSLog(@"[AnimationSpeedTweak v3.3] bid=%@ safe=%d factor=%.3f pageMin=%.0fms viewMin=%.0fms instant=%d",
+              bid, gSafeProfile, gFactor, gMinPageAnimSec*1000, gMinViewAnimSec*1000, gInstantMode);
     }
 }
