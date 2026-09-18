@@ -57,7 +57,7 @@ jobs:
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           DST="generic/platform=iOS"
 
-          echo "=== Build Xcode project ==="
+          echo "=== Build Xcode project (build action, not archive) ==="
           xcodebuild -project AnimationSpeed.xcodeproj \
             -scheme "$SCHEME" \
             -configuration "$CONFIG" \
@@ -67,26 +67,24 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             IPHONEOS_DEPLOYMENT_TARGET=14.0 \
             SWIFT_VERSION=5.0 \
-            -archivePath build/AnimationSpeed \
-            -archive
+            BUILD_LIBRARY_FOR_DISTRIBUTION=NO \
+            -derivedDataPath build/DerivedData \
+            build 2>&1 | tail -10
 
           echo ""
-          echo "=== Package as .ipa ==="
-          # IPA = zip 格式的 .app 目录
-          mkdir -p artifacts
-
-          APP_PATH="build/AnimationSpeed.xcarchive/Products/Applications/AnimationSpeed.app"
-          if [ -d "$APP_PATH" ]; then
-            echo "Found app: $APP_PATH"
+          echo "=== Find .app bundle ==="
+          APP_PATH=$(find build/DerivedData -name "AnimationSpeed.app" -type d 2>/dev/null | head -1)
+          echo "Found: $APP_PATH"
+          if [ -n "$APP_PATH" ] && [ -d "$APP_PATH" ]; then
             echo "App size: $(du -sh "$APP_PATH" | cut -f1)"
-            # 打 zip，改扩展名为 .ipa（TrollStore 接受）
+            mkdir -p artifacts
+            # IPA = zip 格式的 .app 目录
             cd "$(dirname "$APP_PATH")"
             zip -r "$WS/artifacts/AnimationSpeed_4.0.0.ipa" "$(basename "$APP_PATH")" -x "*.DS_Store"
-            echo "IPA created: $(du -h "$WS/artifacts/AnimationSpeed_4.0.0.ipa" | cut -f1)"
+            echo "IPA size: $(du -h "$WS/artifacts/AnimationSpeed_4.0.0.ipa" | cut -f1)"
           else
-            echo "ERROR: App bundle not found at $APP_PATH"
-            ls build/AnimationSpeed.xcarchive/Products/Applications/ 2>/dev/null || echo "No Applications dir"
-            find build/ -name "*.app" 2>/dev/null || echo "No .app found"
+            echo "ERROR: .app not found"
+            find build/DerivedData -name "*.app" -type d 2>/dev/null | head -5
           fi
 
           echo ""
