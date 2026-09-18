@@ -78,12 +78,13 @@ jobs:
           THEOS: ${{ github.workspace }}/theos
         run: |
           set -e
-          cd /home/runner/work/AnimationSpeed-v4/AnimationSpeed-v4
+          WS="${{ github.workspace }}"
+          cd "$WS"
           pwd
           ls -la
 
           # theos 环境变量
-          export THEOS="${{ github.workspace }}/theos"
+          export THEOS="$WS/theos"
           export PATH="$THEOS/bin:$PATH"
 
           make clean 2>/dev/null || true
