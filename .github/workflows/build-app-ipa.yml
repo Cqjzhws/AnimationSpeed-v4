@@ -1,0 +1,54 @@
+name: Build Enhanced IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build app
+        run: |
+          set -e
+          cd App
+          xcodebuild \
+            -project AnimationSpeed.xcodeproj \
+            -scheme AnimationSpeed \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            ONLY_ACTIVE_ARCH=NO \
+            build
+
+      - name: Package IPA
+        run: |
+          set -e
+          cd App
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          echo "APP=$APP"
+          # 拷贝 RootHelper（重启按键依赖，保持原版行为）
+          cp -f RebootRootHelper "$APP/"
+          # 单独给 helper 签名，避免主包签名时报未签名嵌套代码
+          codesign --force --sign - "$APP/RebootRootHelper" || true
+          rm -rf "$APP/_CodeSignature"
+          # 用 entitlements（含 no-sandbox / persona-mgmt / iokit 例外）重签主包
+          codesign --force --sign - --entitlements entitlements.plist "$APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry AnimationSpeed_enhanced.ipa Payload
+          ls -la AnimationSpeed_enhanced.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnimationSpeed-enhanced-ipa
+          path: App/AnimationSpeed_enhanced.ipa
