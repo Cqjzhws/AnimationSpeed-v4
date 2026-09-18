@@ -13,7 +13,7 @@
 
 // MARK: - 全局状态
 
-static double gFactor          = 0.001;
+static double gFactor          = 0.010;  // 广覆盖 v3.2：factor=0.01
 static double gMinDurationMs   = 0.0;  // 0=不保护
 // 最小动画保障：视图控制器转场不能太快，否则状态机错乱闪退（微信实测 50ms 安全）
 static double gMinPageAnimSec  = 0.050;  // present/push/pop/dismiss/弹层 跳转最小 50ms
