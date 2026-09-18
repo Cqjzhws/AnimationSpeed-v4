@@ -1,9 +1,11 @@
-// AnimationSpeedTweak v3.4 — bundle-aware single dylib
-// Safe profile (WeChat/WeWork): exact v6_fix 19-hook set, factor 0.001
-// Broad profile (other apps): +激进hook, factor 0.01
+// AnimationSpeedTweak v3.5 — bundle-aware single dylib
+// Safe profile (WeChat/WeWork): v6_fix 19-hook + CALayer/C AAnimation 加速
+// Broad profile (other apps): +UIDynamicAnimator, factor 0.01
+//
 // 修复：CAPropertyAnimation setDuration 是类方法→swizzleClass；
 //       swizzle helper 用 class_addMethod 桥接（v6_fix 验证机制）；
-//       激进 hook 仅在非 safe profile 时安装。
+//       safe profile 加回 CALayer actionForKey + CAAnimation setDuration
+//       （v3.1极速感的主要来源，v6_fix 因稳定顾虑去掉了）。
 //
 // 编译：clang -arch arm64 -dynamiclib -isysroot $SDK -undefined dynamic_lookup -fobjc-arc \
 //        -framework Foundation -framework UIKit -framework QuartzCore -o AnimationSpeedTweak.dylib Tweak.m
@@ -16,8 +18,8 @@
 // MARK: - 全局状态
 
 static double gFactor          = 0.010;  // 非微信 App 广覆盖档
-static double gWeChatFactor    = 0.001;  // 微信安全档（v6 实测稳定）
-static BOOL   gSafeProfile     = NO;     // YES=微信等敏感 App：只装安全 hook 集
+static double gWeChatFactor   = 0.001;  // 微信安全档（v6 实测稳定）
+static BOOL   gSafeProfile     = NO;     // YES=微信：只装安全 hook 集（含 CALayer/C AAnim）
 static BOOL   gInstantMode     = NO;
 static double gMinPageAnimSec  = 0.050;  // 页面跳转最小 50ms（防状态机闪退）
 static double gMinViewAnimSec  = 0.016;  // 视图动画最小 16ms（1 帧）
@@ -95,8 +97,7 @@ static BOOL _swizzleClass(Class cls, SEL orig, SEL repl) {
     if (!class_addMethod(meta, repl, replImp, types)) {
         Method existing = class_getClassMethod(cls, repl);
         if (existing) { method_exchangeImplementations(origMethod, existing); return YES; }
-        NSLog(@"[AST] FAIL add %@ to meta %@", NSStringFromSelector(repl), cls); return NO;
-    }
+        NSLog(@"[AST] FAIL add %@ to meta %@", NSStringFromSelector(repl), cls); return NO; }
     Method replInCls = class_getClassMethod(cls, repl);
     method_exchangeImplementations(origMethod, replInCls);
     return YES;
@@ -249,9 +250,9 @@ static BOOL _swizzleClass(Class cls, SEL orig, SEL repl) {
 static void _install(void) {
     int ok=0, total=0;
     double f = _effectiveFactor();
-    NSLog(@"[AnimationSpeedTweak v3.4] bid=%@ safe=%d factor=%.4f", NSBundle.mainBundle.bundleIdentifier, gSafeProfile, f);
+    NSLog(@"[AnimationSpeedTweak v3.5] bid=%@ safe=%d factor=%.4f", NSBundle.mainBundle.bundleIdentifier, gSafeProfile, f);
 
-    // ─── 通用安全 hook（无论哪个 profile 都装）───────────────────────────
+    // ─── 通用安全 hook ──────────────────────────────────────────────────
     Class UIView_cls = [UIView class];
     total += 6;
     ok += _swizzleClass(UIView_cls, @selector(animateWithDuration:animations:),
@@ -309,28 +310,30 @@ static void _install(void) {
     total += 2;
     ok += _swizzleClass([CATransaction class], @selector(setAnimationDuration:),
                         @selector(as_CATrans_setDuration:));
-    // CAPropertyAnimation setDuration 是类方法！用 _swizzleClass（v6_fix 验证正确）
     ok += _swizzleClass([CAPropertyAnimation class], @selector(setDuration:),
                         @selector(as_CAProp_setDuration:));
 
-    NSLog(@"[AnimationSpeedTweak v3.4] installed safe hooks %d/%d", ok, total);
+    // ─── Safe profile 也装 CALayer/C AAnimation（极速感的主要来源）─────
+    //    CAPropertyAnimation/CATransaction 已上；这里加 CALayer + CAAnimation instance
+    Class CALR_cls = [CALayer class];
+    total += 1;
+    ok += _swizzleInstance(CALR_cls, @selector(actionForKey:),
+                           @selector(as_CALayer_actionForKey:));
+    // swizzle CAAnimation setDuration: instance method so CALayer hook can call it
+    total += 1;
+    ok += _swizzleInstance([CAAnimation class], @selector(setDuration:),
+                           @selector(as_CAAnim_setDuration:));
 
-    // ─── 激进 hook（仅非 safe profile）────────────────────────────────
+    NSLog(@"[AnimationSpeedTweak v3.5] installed hooks %d/%d", ok, total);
+
+    // ─── 激进 hook（仅非 safe profile：UIDynamicAnimator）──────────────
     if (!gSafeProfile) {
         int ok2=0, total2=0;
-        Class CALR_cls = [CALayer class];
-        total2++;
-        ok2 += _swizzleInstance(CALR_cls, @selector(actionForKey:),
-                                @selector(as_CALayer_actionForKey:));
-        // swizzle CAAnimation setDuration: (instance) so CALayer hook can call it on CAAnimation instances
-        total2++;
-        ok2 += _swizzleInstance([CAAnimation class], @selector(setDuration:),
-                                @selector(as_CAAnim_setDuration:));
         Class UIDy_cls = [UIDynamicAnimator class];
         total2++;
         ok2 += _swizzleInstance(UIDy_cls, @selector(addBehavior:),
                                 @selector(as_UIDy_addBehavior:));
-        NSLog(@"[AnimationSpeedTweak v3.4] installed risky hooks %d/%d", ok2, total2);
+        NSLog(@"[AnimationSpeedTweak v3.5] installed extra risky hooks %d/%d", ok2, total2);
     }
 
     // HUD 横幅（延迟 1s 显示，确认注入成功）
@@ -341,7 +344,7 @@ static void _install(void) {
         bar.backgroundColor = [UIColor colorWithRed:0 green:0.5 blue:1 alpha:0.85];
         bar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
         UILabel *lbl = [[UILabel alloc] initWithFrame:bar.bounds];
-        lbl.text = [NSString stringWithFormat:@"AnimationSpeed %@ factor=%.4f",
+        lbl.text = [NSString stringWithFormat:@"AST v3.5 %@ factor=%.4f",
                     gSafeProfile ? @"SAFE" : @"BROAD", _effectiveFactor()];
         lbl.textColor = [UIColor whiteColor]; lbl.font = [UIFont systemFontOfSize:12];
         lbl.textAlignment = NSTextAlignmentCenter;
@@ -361,13 +364,13 @@ static void _astweak_init(void) {
             [bid isEqualToString:@"com.tencent.wework"] ||
             [bid hasPrefix:@"com.tencent.wework"]) {
             gSafeProfile    = YES;
-            gFactor         = gWeChatFactor;  // 0.001，v6 实测稳定
+            gFactor         = gWeChatFactor;  // 0.001
             gMinPageAnimSec = 0.050;
             gMinViewAnimSec = 0.016;
             gMinCALayerSec  = 0.020;
         }
         _install();
-        NSLog(@"[AnimationSpeedTweak v3.4] ready bid=%@ safe=%d factor=%.4f minPage=%.0fms",
+        NSLog(@"[AnimationSpeedTweak v3.5] ready bid=%@ safe=%d factor=%.4f minPage=%.0fms",
               bid, gSafeProfile, gFactor, gMinPageAnimSec*1000);
     }
 }
