@@ -2,65 +2,16 @@
 #import <objc/runtime.h>
 
 // ================================
-// 全局配置（运行时可热改）
+// 全局配置
 // ================================
-static double gFactor = 0.001;
-static NSTimeInterval gMinDurationMs = 0;
+static double gFactor = 0.01;
 static BOOL gInstantMode = NO;
-
-// ================================
-// 黑名单 & 单App配置
-// ================================
-static NSMutableSet *gBlacklist = nil;
-static NSMutableDictionary *gPerApp = nil;
-
-// ================================
-// 配置重载（每秒执行一次）
-// ================================
-static CFDateRef _lastRead = NULL;
-static void _reloadConfigIfNeeded(void) {
-    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
-    if (_lastRead && now - CFDateGetAbsoluteTime(_lastRead) < 1.0) return;
-    if (_lastRead) CFRelease(_lastRead);
-    _lastRead = CFDateCreate(kCFAllocatorDefault, now);
-
-    NSString *path = @"/var/Managed Preferences/mobile/com.developlab.animationspeed.plist";
-    NSDictionary *cfg = [NSDictionary dictionaryWithContentsOfFile:path];
-    if (!cfg) return;
-
-    id fv = cfg[@"UIAnimationDragCoefficient"];
-    if (fv) gFactor = [fv doubleValue];
-
-    id mv = cfg[@"MinDurationMs"];
-    if (mv) gMinDurationMs = [mv doubleValue];
-
-    id iv = cfg[@"InstantMode"];
-    if (iv) gInstantMode = [iv boolValue];
-
-    id bl = cfg[@"Blacklist"];
-    if (bl && [bl isKindOfClass:[NSArray class]]) {
-        [gBlacklist removeAllObjects];
-        [gBlacklist addObjectsFromArray:bl];
-    }
-
-    id pa = cfg[@"PerAppFactor"];
-    if (pa && [pa isKindOfClass:[NSDictionary class]]) {
-        [gPerApp addEntriesFromDictionary:pa];
-    }
-}
 
 // ================================
 // 核心加速逻辑
 // ================================
 static double _effectiveFactor(void) {
-    _reloadConfigIfNeeded();
     if (gInstantMode) return 0.0;
-    NSString *bid = NSBundle.mainBundle.bundleIdentifier;
-    if (bid && [gBlacklist containsObject:bid]) return 1.0;
-    if (bid) {
-        NSNumber *o = gPerApp[bid];
-        if (o && o.doubleValue > 0 && o.doubleValue <= 2.0) return o.doubleValue;
-    }
     return gFactor;
 }
 
@@ -68,7 +19,6 @@ static double _effectiveFactor(void) {
 static inline NSTimeInterval _scaleInterval(NSTimeInterval t, double f) {
     if (gInstantMode) return 0.0;
     if (t <= 0) return t;
-    if (gMinDurationMs > 0 && t * 1000.0 < gMinDurationMs) return t;
     NSTimeInterval s = t * f;
     return (s < 0.016 && s > 0) ? 0.016 : s;
 }
@@ -303,18 +253,13 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
 @end
 
 // ================================
-// 安装全部 Hook
+// 安装全部 Hook + 启动确认横幅
 // ================================
 __attribute__((constructor))
 static void _astweak_install(void) {
     @autoreleasepool {
-        gBlacklist = [NSMutableSet set];
-        gPerApp    = [NSMutableDictionary dictionary];
-        _reloadConfigIfNeeded();
-
         double f = _effectiveFactor();
-        NSLog(@"[AnimationSpeedTweak] factor=%.3f minMs=%.0f instant=%d",
-              f, gMinDurationMs, gInstantMode);
+        NSLog(@"[AnimationSpeedTweak] factor=%.3f instant=%d", f, gInstantMode);
 
         // UIView 动画类方法
         Class UIView_cls = [UIView class];
@@ -376,6 +321,32 @@ static void _astweak_install(void) {
         _swizzleClass([CAPropertyAnimation class], @selector(setDuration:),
                       @selector(as_CAProp_setDuration:));
 
-        NSLog(@"[AnimationSpeedTweak] all hooks installed OK (%d total)", 19);
+        NSLog(@"[AnimationSpeedTweak] all hooks installed OK (19 total)");
+
+        // 启动确认横幅：注入成功会出现 2.5 秒
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UIWindow *win = UIApplication.sharedApplication.keyWindow;
+            if (!win) win = UIApplication.sharedApplication.windows.firstObject;
+            if (!win) return;
+            UILabel *hud = [[UILabel alloc] initWithFrame:CGRectZero];
+            hud.text = [NSString stringWithFormat:@"⚡ AnimationSpeed v5  f=%.3f", gFactor];
+            hud.textAlignment = NSTextAlignmentCenter;
+            hud.textColor = [UIColor whiteColor];
+            hud.font = [UIFont boldSystemFontOfSize:13];
+            hud.backgroundColor = [UIColor colorWithRed:0 green:0 blue:0 alpha:0.78];
+            hud.layer.cornerRadius = 8;
+            hud.clipsToBounds = YES;
+            hud.userInteractionEnabled = NO;
+            [hud sizeToFit];
+            CGRect hf = hud.frame;
+            hf.size.width += 24; hf.size.height += 12;
+            hud.frame = CGRectMake((win.bounds.size.width - hf.size.width) / 2.0,
+                                   win.bounds.size.height - 90,
+                                   hf.size.width, hf.size.height);
+            [win addSubview:hud];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [hud removeFromSuperview];
+            });
+        });
     }
 }
