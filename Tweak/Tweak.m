@@ -64,13 +64,23 @@ static double _effectiveFactor(void) {
     return gFactor;
 }
 
-// duration 缩放：小于 minMs 不动，返回值保证 >= 0.016s 防止瞬间完成
+// 普通缩放：小值不动，超过 minMs 才缩
 static inline NSTimeInterval _scaleInterval(NSTimeInterval t, double f) {
     if (gInstantMode) return 0.0;
     if (t <= 0) return t;
     if (gMinDurationMs > 0 && t * 1000.0 < gMinDurationMs) return t;
     NSTimeInterval s = t * f;
     return (s < 0.016 && s > 0) ? 0.016 : s;
+}
+
+// VC 级缩放：保底 minMs 毫秒，防止闪退
+static inline NSTimeInterval _scaleVC(NSTimeInterval t, double f, double minMs) {
+    if (gInstantMode) return 0.0;
+    if (t <= 0) return t;
+    NSTimeInterval scaled = t * f;
+    double minSec = minMs / 1000.0;
+    if (scaled < minSec) scaled = minSec;
+    return scaled;
 }
 
 // ================================
@@ -91,11 +101,11 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
 }
 
 // ================================
-// AnimationSpeedTweak — 所有 swizzle 方法
+// AnimationSpeedTweak
 // ================================
 @implementation AnimationSpeedTweak
 
-// MARK: UIView (Class Methods) — animateWithDuration 全家桶
+// MARK: UIView animateWithDuration 全家桶
 + (void)as_UIView_animate:(NSTimeInterval)d
                animations:(void (^)(void))a {
     double f = _effectiveFactor();
@@ -139,6 +149,7 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
                   completion:c];
 }
 
+// MARK: UIView transition
 + (void)as_UIView_transitionWithView:(UIView *)vw
                              duration:(NSTimeInterval)d
                               options:(UIViewAnimationOptions)o
@@ -197,16 +208,96 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
                      completion:nil];
 }
 
-// MARK: CATransaction
-+ (void)as_CATrans_setDuration:(CFTimeInterval)d {
+// MARK: UINavigationController — push/pop（保底 50ms）
+- (void)as_Nav_pushViewController:(UIViewController *)vc animated:(BOOL)an {
+    if (!an) { [self as_Nav_pushViewController:vc animated:an]; return; }
     double f = _effectiveFactor();
-    [self as_CATrans_setDuration:_scaleInterval(d, f)];
+    [UIView animateWithDuration:_scaleVC(0.35, f, 50)
+                          delay:0
+                        options:UIViewAnimationOptionCurveEaseInOut
+                     animations:^{ [self as_Nav_pushViewController:vc animated:NO]; }
+                     completion:nil];
 }
 
-// MARK: CAPropertyAnimation
+- (UIViewController *)as_Nav_popViewControllerAnimated:(BOOL)an {
+    if (!an) return [self as_Nav_popViewControllerAnimated:an];
+    double f = _effectiveFactor();
+    __block UIViewController *result = nil;
+    [UIView animateWithDuration:_scaleVC(0.35, f, 50)
+                          delay:0
+                        options:UIViewAnimationOptionCurveEaseInOut
+                     animations:^{ result = [self as_Nav_popViewControllerAnimated:NO]; }
+                     completion:nil];
+    return result;
+}
+
+- (NSArray<UIViewController *> *)as_Nav_popToViewController:(UIViewController *)vc animated:(BOOL)an {
+    if (!an) return [self as_Nav_popToViewController:vc animated:an];
+    double f = _effectiveFactor();
+    __block NSArray *result = nil;
+    [UIView animateWithDuration:_scaleVC(0.35, f, 50)
+                          delay:0
+                        options:UIViewAnimationOptionCurveEaseInOut
+                     animations:^{ result = [self as_Nav_popToViewController:vc animated:NO]; }
+                     completion:nil];
+    return result;
+}
+
+- (NSArray<UIViewController *> *)as_Nav_popToRootViewControllerAnimated:(BOOL)an {
+    if (!an) return [self as_Nav_popToRootViewControllerAnimated:an];
+    double f = _effectiveFactor();
+    __block NSArray *result = nil;
+    [UIView animateWithDuration:_scaleVC(0.35, f, 50)
+                          delay:0
+                        options:UIViewAnimationOptionCurveEaseInOut
+                     animations:^{ result = [self as_Nav_popToRootViewControllerAnimated:NO]; }
+                     completion:nil];
+    return result;
+}
+
+// MARK: UITabBarController — tab 切换（保底 50ms）
+- (void)as_Tab_setSelectedIndex:(NSUInteger)idx {
+    double f = _effectiveFactor();
+    [UIView animateWithDuration:_scaleVC(0.25, f, 50)
+                          delay:0
+                        options:UIViewAnimationOptionCurveEaseInOut
+                     animations:^{ [self as_Tab_setSelectedIndex:idx]; }
+                     completion:nil];
+}
+
+// MARK: UIViewController — present/dismiss（保底 100ms，最敏感）
+- (void)as_VC_presentViewController:(UIViewController *)vc
+                           animated:(BOOL)an
+                         completion:(void (^)(void))c {
+    if (!an) { [self as_VC_presentViewController:vc animated:an completion:c]; return; }
+    double f = _effectiveFactor();
+    [UIView animateWithDuration:_scaleVC(0.30, f, 100)
+                          delay:0
+                        options:UIViewAnimationOptionCurveEaseInOut
+                     animations:^{ [self as_VC_presentViewController:vc animated:NO completion:nil]; }
+                     completion:c];
+}
+
+- (void)as_VC_dismissViewControllerAnimated:(BOOL)an completion:(void (^)(void))c {
+    if (!an) { [self as_VC_dismissViewControllerAnimated:an completion:c]; return; }
+    double f = _effectiveFactor();
+    [UIView animateWithDuration:_scaleVC(0.30, f, 100)
+                          delay:0
+                        options:UIViewAnimationOptionCurveEaseInOut
+                     animations:^{ [self as_VC_dismissViewControllerAnimated:NO completion:nil]; }
+                     completion:c];
+}
+
+// MARK: CATransaction（保底 16ms）
++ (void)as_CATrans_setDuration:(CFTimeInterval)d {
+    double f = _effectiveFactor();
+    [self as_CATrans_setDuration:_scaleVC(d, f, 16)];
+}
+
+// MARK: CAPropertyAnimation（保底 16ms）
 + (void)as_CAProp_setDuration:(CFTimeInterval)d {
     double f = _effectiveFactor();
-    [self as_CAProp_setDuration:_scaleInterval(d, f)];
+    [self as_CAProp_setDuration:_scaleVC(d, f, 16)];
 }
 
 @end
@@ -256,16 +347,35 @@ static void _astweak_install(void) {
         _swizzleInstance(UISV_cls, @selector(scrollRectToVisible:animated:),
                          @selector(as_UISV_scrollRectToVisible:animated:));
 
-        // CATransaction
-        Class CATrans_cls = [CATransaction class];
-        _swizzleClass(CATrans_cls, @selector(setAnimationDuration:),
-                      @selector(as_CATrans_setDuration:));
+        // UINavigationController
+        Class Nav_cls = [UINavigationController class];
+        _swizzleInstance(Nav_cls, @selector(pushViewController:animated:),
+                         @selector(as_Nav_pushViewController:animated:));
+        _swizzleInstance(Nav_cls, @selector(popViewControllerAnimated:),
+                         @selector(as_Nav_popViewControllerAnimated:));
+        _swizzleInstance(Nav_cls, @selector(popToViewController:animated:),
+                         @selector(as_Nav_popToViewController:animated:));
+        _swizzleInstance(Nav_cls, @selector(popToRootViewControllerAnimated:),
+                         @selector(as_Nav_popToRootViewControllerAnimated:));
 
-        // CAPropertyAnimation
-        Class CAProp_cls = [CAPropertyAnimation class];
-        _swizzleClass(CAProp_cls, @selector(setDuration:),
+        // UITabBarController
+        Class Tab_cls = [UITabBarController class];
+        _swizzleInstance(Tab_cls, @selector(setSelectedIndex:),
+                         @selector(as_Tab_setSelectedIndex:));
+
+        // UIViewController present/dismiss
+        Class VC_cls = [UIViewController class];
+        _swizzleInstance(VC_cls, @selector(presentViewController:animated:completion:),
+                         @selector(as_VC_presentViewController:animated:completion:));
+        _swizzleInstance(VC_cls, @selector(dismissViewControllerAnimated:completion:),
+                         @selector(as_VC_dismissViewControllerAnimated:completion:));
+
+        // CATransaction / CAPropertyAnimation
+        _swizzleClass([CATransaction class], @selector(setAnimationDuration:),
+                      @selector(as_CATrans_setDuration:));
+        _swizzleClass([CAPropertyAnimation class], @selector(setDuration:),
                       @selector(as_CAProp_setDuration:));
 
-        NSLog(@"[AnimationSpeedTweak] all hooks installed OK");
+        NSLog(@"[AnimationSpeedTweak] all hooks installed OK (%d total)", 19);
     }
 }
