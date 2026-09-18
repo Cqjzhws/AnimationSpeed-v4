@@ -1,6 +1,6 @@
 Package: com.developlab.animationspeed.tweak
 Name: AnimationSpeedTweak
-Version: 4.0.0
+Version: 4.0.1
 Architecture: iphoneos-arm
 Description: Injectable dylib for AnimationSpeed — pure ObjC runtime swizzle, NO CydiaSubstrate. Hooks UIView/CATransaction/UIViewPropertyAnimator/UIScrollView/UIViewController animations.
 Maintainer: developlab
