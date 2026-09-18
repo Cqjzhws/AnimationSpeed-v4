@@ -1,4 +1,6 @@
 #import <UIKit/UIKit.h>
+#import <objc/runtime.h>
+#import <objc/runtime.h>
 
 // ================================
 // 全局配置（运行时可热改）
