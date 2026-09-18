@@ -1,13 +1,12 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
-#import <objc/runtime.h>
 
 // ================================
 // 全局配置（运行时可热改）
 // ================================
-static double gFactor = 0.10;        // 加速系数，越小越快
-static NSTimeInterval gMinDurationMs = 0; // 低于此毫秒的动画不缩（0=全部缩）
-static BOOL gInstantMode = NO;       // 瞬间模式（duration=0）
+static double gFactor = 0.10;
+static NSTimeInterval gMinDurationMs = 0;
+static BOOL gInstantMode = NO;
 
 // ================================
 // 黑名单 & 单App配置
@@ -65,13 +64,13 @@ static double _effectiveFactor(void) {
     return gFactor;
 }
 
-// duration 缩放：小于 minMs 不动，返回值保证 >= 0.010s 防止瞬间完成
+// duration 缩放：小于 minMs 不动，返回值保证 >= 0.016s 防止瞬间完成
 static inline NSTimeInterval _scaleInterval(NSTimeInterval t, double f) {
     if (gInstantMode) return 0.0;
     if (t <= 0) return t;
     if (gMinDurationMs > 0 && t * 1000.0 < gMinDurationMs) return t;
     NSTimeInterval s = t * f;
-    return (s < 0.016 && s > 0) ? 0.016 : s; // 至少保 1 帧（~16ms）
+    return (s < 0.016 && s > 0) ? 0.016 : s;
 }
 
 // ================================
@@ -92,10 +91,13 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
 }
 
 // ================================
-// UIView (Class Methods) — animateWithDuration 全家桶
+// AnimationSpeedTweak — 所有 swizzle 方法
 // ================================
+@implementation AnimationSpeedTweak
 
-+ (void)as_animateWithDuration:(NSTimeInterval)d animations:(void (^)(void))a {
+// UIView (Class Methods) — animateWithDuration 全家桶
++ (void)as_animateWithDuration:(NSTimeInterval)d
+                    animations:(void (^)(void))a {
     double f = _effectiveFactor();
     [self as_animateWithDuration:_scaleInterval(d, f) animations:a];
 }
@@ -104,8 +106,7 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
                     animations:(void (^)(void))a
                     completion:(void (^)(BOOL))c {
     double f = _effectiveFactor();
-    NSTimeInterval nd = _scaleInterval(d, f);
-    [self as_animateWithDuration:nd animations:a completion:c];
+    [self as_animateWithDuration:_scaleInterval(d, f) animations:a completion:c];
 }
 
 + (void)as_animateWithDuration:(NSTimeInterval)d
@@ -156,11 +157,9 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
     [self as_transitionFromView:fv toView:tv duration:_scaleInterval(d, f) options:o completion:c];
 }
 
-// ================================
 // UIViewPropertyAnimator
-// ================================
 - (instancetype)as_initWithDuration:(NSTimeInterval)d
-                  timingParameters:(id <UITimingCurveProvider>)tp {
+                  timingParameters:(id<UITimingCurveProvider>)tp {
     double f = _effectiveFactor();
     return [self as_initWithDuration:_scaleInterval(d, f) timingParameters:tp];
 }
@@ -177,9 +176,7 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
     [self as_setDuration:_scaleInterval(d, f)];
 }
 
-// ================================
 // UIScrollView
-// ================================
 - (void)as_setContentOffset:(CGPoint)o animated:(BOOL)an {
     if (!an) { [self as_setContentOffset:o animated:an]; return; }
     double f = _effectiveFactor();
@@ -200,83 +197,78 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
                      completion:nil];
 }
 
-// ================================
-// CATransaction (Class Method) — 控制所有 Core Animation 动画时长
-// ================================
+// CATransaction（控制所有 Core Animation 动画时长）
 + (void)as_setAnimationDuration:(CFTimeInterval)d {
     double f = _effectiveFactor();
     [self as_setAnimationDuration:_scaleInterval(d, f)];
 }
 
-// ================================
-// CAPropertyAnimation (CABasicAnimation / CAKeyframeAnimation 等)
-// ================================
+// CAPropertyAnimation
 - (void)as_setDuration:(CFTimeInterval)d {
     double f = _effectiveFactor();
     [self as_setDuration:_scaleInterval(d, f)];
 }
 
+@end
+
 // ================================
 // 安装全部 Hook
 // ================================
-static void _install(void) {
-    double f = _effectiveFactor();
-    NSLog(@"[AnimationSpeedTweak] factor=%.3f minMs=%.0f instant=%d",
-          f, gMinDurationMs, gInstantMode);
-
-    // UIView 动画类方法
-    Class UIView_cls = [UIView class];
-    _swizzleClass(UIView_cls, @selector(animateWithDuration:animations:),
-                  @selector(as_animateWithDuration:animations:));
-    _swizzleClass(UIView_cls, @selector(animateWithDuration:animations:completion:),
-                  @selector(as_animateWithDuration:animations:completion:));
-    _swizzleClass(UIView_cls, @selector(animateWithDuration:delay:options:animations:completion:),
-                  @selector(as_animateWithDuration:delay:options:animations:completion:));
-    _swizzleClass(UIView_cls, @selector(animateWithDuration:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:),
-                  @selector(as_animateWithDuration:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:));
-    _swizzleClass(UIView_cls, @selector(transitionWithView:duration:options:animations:completion:),
-                  @selector(as_transitionWithView:duration:options:animations:completion:));
-    _swizzleClass(UIView_cls, @selector(transitionFromView:toView:duration:options:completion:),
-                  @selector(as_transitionFromView:toView:duration:options:completion:));
-
-    // UIViewPropertyAnimator
-    Class UIPA_cls = [UIViewPropertyAnimator class];
-    _swizzleInstance(UIPA_cls, @selector(initWithDuration:timingParameters:),
-                     @selector(as_initWithDuration:timingParameters:));
-    _swizzleInstance(UIPA_cls, @selector(initWithDuration:dampingRatio:animations:),
-                     @selector(as_initWithDuration:dampingRatio:animations:));
-    _swizzleInstance(UIPA_cls, @selector(setDuration:),
-                     @selector(as_setDuration:));
-
-    // UIScrollView
-    Class UISV_cls = [UIScrollView class];
-    _swizzleInstance(UISV_cls, @selector(setContentOffset:animated:),
-                     @selector(as_setContentOffset:animated:));
-    _swizzleInstance(UISV_cls, @selector(scrollRectToVisible:animated:),
-                     @selector(as_scrollRectToVisible:animated:));
-
-    // CATransaction（影响所有隐式 CA 动画）
-    Class CATrans_cls = [CATransaction class];
-    _swizzleClass(CATrans_cls, @selector(setAnimationDuration:),
-                  @selector(as_setAnimationDuration:));
-
-    // CAPropertyAnimation
-    Class CAProp_cls = [CAPropertyAnimation class];
-    _swizzleInstance(CAProp_cls, @selector(setDuration:),
-                     @selector(as_setDuration:));
-
-    NSLog(@"[AnimationSpeedTweak] all hooks installed OK");
-}
-
-// ================================
-// 构造器
-// ================================
 __attribute__((constructor))
-static void _astweak_init(void) {
+static void _astweak_install(void) {
     @autoreleasepool {
         gBlacklist = [NSMutableSet set];
         gPerApp    = [NSMutableDictionary dictionary];
         _reloadConfigIfNeeded();
-        _install();
+
+        double f = _effectiveFactor();
+        NSLog(@"[AnimationSpeedTweak] factor=%.3f minMs=%.0f instant=%d",
+              f, gMinDurationMs, gInstantMode);
+
+        Class cls = [AnimationSpeedTweak class];
+
+        // UIView 动画类方法
+        Class UIView_cls = [UIView class];
+        _swizzleClass(UIView_cls, @selector(animateWithDuration:animations:),
+                      @selector(as_animateWithDuration:animations:));
+        _swizzleClass(UIView_cls, @selector(animateWithDuration:animations:completion:),
+                      @selector(as_animateWithDuration:animations:completion:));
+        _swizzleClass(UIView_cls, @selector(animateWithDuration:delay:options:animations:completion:),
+                      @selector(as_animateWithDuration:delay:options:animations:completion:));
+        _swizzleClass(UIView_cls, @selector(animateWithDuration:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:),
+                      @selector(as_animateWithDuration:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:));
+        _swizzleClass(UIView_cls, @selector(transitionWithView:duration:options:animations:completion:),
+                      @selector(as_transitionWithView:duration:options:animations:completion:));
+        _swizzleClass(UIView_cls, @selector(transitionFromView:toView:duration:options:completion:),
+                      @selector(as_transitionFromView:toView:duration:options:completion:));
+
+        // UIViewPropertyAnimator
+        Class UIPA_cls = [UIViewPropertyAnimator class];
+        _swizzleInstance(UIPA_cls, @selector(initWithDuration:timingParameters:),
+                         @selector(as_initWithDuration:timingParameters:));
+        _swizzleInstance(UIPA_cls, @selector(initWithDuration:dampingRatio:animations:),
+                         @selector(as_initWithDuration:dampingRatio:animations:));
+        _swizzleInstance(UIPA_cls, @selector(setDuration:),
+                         @selector(as_setDuration:));
+
+        // UIScrollView
+        Class UISV_cls = [UIScrollView class];
+        _swizzleInstance(UISV_cls, @selector(setContentOffset:animated:),
+                         @selector(as_setContentOffset:animated:));
+        _swizzleInstance(UISV_cls, @selector(scrollRectToVisible:animated:),
+                         @selector(as_scrollRectToVisible:animated:));
+
+        // CATransaction
+        Class CATrans_cls = [CATransaction class];
+        _swizzleClass(CATrans_cls, @selector(setAnimationDuration:),
+                      @selector(as_setAnimationDuration:));
+
+        // CAPropertyAnimation
+        Class CAProp_cls = [CAPropertyAnimation class];
+        _swizzleInstance(CAProp_cls, @selector(setDuration:),
+                         @selector(as_setDuration:));
+
+        NSLog(@"[AnimationSpeedTweak] all hooks installed OK");
+        (void)cls; // suppress unused warning
     }
 }
