@@ -202,9 +202,14 @@ static BOOL _swizzleClass(Class cls, SEL orig, SEL repl) {
     [self as_CATrans_setDuration:_scaleVC(d,_effectiveFactor(),16)];
 }
 
-// CAPropertyAnimation setDuration（类方法，v6_fix 验证正确）
+// CAPropertyAnimation setDuration（类方法，供 swizzle 替换类方法）
 + (void)as_CAProp_setDuration:(CFTimeInterval)d {
     [self as_CAProp_setDuration:_scaleVC(d,_effectiveFactor(),16)];
+}
+
+// CAAnimation setDuration 实例方法（供 CALayer hook 调用）
+- (void)as_CAAnim_setDuration:(CFTimeInterval)d {
+    [self as_CAAnim_setDuration:_scaleVC(d,_effectiveFactor(),20)];
 }
 
 @end
@@ -217,7 +222,7 @@ static BOOL _swizzleClass(Class cls, SEL orig, SEL repl) {
 - (id)as_CALayer_actionForKey:(NSString*)key {
     id action = [self as_CALayer_actionForKey:key];
     if ([action isKindOfClass:[CAAnimation class]]) {
-        [(CAAnimation*)action as_CAProp_setDuration:_scaleVC([(CAAnimation*)action duration], _effectiveFactor(), 20)];
+        [(CAAnimation*)action as_CAAnim_setDuration:_scaleVC([(CAAnimation*)action duration], _effectiveFactor(), 20)];
     }
     return action;
 }
@@ -310,6 +315,10 @@ static void _install(void) {
         total2++;
         ok2 += _swizzleInstance(CALR_cls, @selector(actionForKey:),
                                 @selector(as_CALayer_actionForKey:));
+        // swizzle CAAnimation setDuration: (instance) so CALayer hook can call it on CAAnimation instances
+        total2++;
+        ok2 += _swizzleInstance([CAAnimation class], @selector(setDuration:),
+                                @selector(as_CAAnim_setDuration:));
         Class UIDy_cls = [UIDynamicAnimator class];
         total2++;
         ok2 += _swizzleInstance(UIDy_cls, @selector(addBehavior:),
