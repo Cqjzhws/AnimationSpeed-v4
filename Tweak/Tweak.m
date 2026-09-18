@@ -271,21 +271,21 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
                          completion:(void (^)(void))c {
     if (!an) { [self as_VC_presentViewController:vc animated:an completion:c]; return; }
     double f = _effectiveFactor();
-    [UIView animateWithDuration:_scaleVC(0.30, f, 100)
-                          delay:0
-                        options:UIViewAnimationOptionCurveEaseInOut
-                     animations:^{ [self as_VC_presentViewController:vc animated:NO completion:nil]; }
-                     completion:c];
+    NSTimeInterval d = _scaleVC(0.30, f, 100);
+    [self as_VC_presentViewController:vc animated:NO completion:c];
+    if (c) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d * NSEC_PER_SEC)), dispatch_get_main_queue(), c);
+    }
 }
 
 - (void)as_VC_dismissViewControllerAnimated:(BOOL)an completion:(void (^)(void))c {
     if (!an) { [self as_VC_dismissViewControllerAnimated:an completion:c]; return; }
     double f = _effectiveFactor();
-    [UIView animateWithDuration:_scaleVC(0.30, f, 100)
-                          delay:0
-                        options:UIViewAnimationOptionCurveEaseInOut
-                     animations:^{ [self as_VC_dismissViewControllerAnimated:NO completion:nil]; }
-                     completion:c];
+    NSTimeInterval d = _scaleVC(0.30, f, 100);
+    [self as_VC_dismissViewControllerAnimated:NO completion:c];
+    if (c) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d * NSEC_PER_SEC)), dispatch_get_main_queue(), c);
+    }
 }
 
 // MARK: CATransaction（保底 16ms）
