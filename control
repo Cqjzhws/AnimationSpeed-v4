@@ -1,6 +1,6 @@
 Package: com.developlab.animationspeed
 Name: Animation Speed
-Version: 4.0.2
+Version: 4.0.3
 Architecture: iphoneos-arm
 Description: Change UI Animation Speed — 4 presets, SmartScale, pure dylib hook, zero substrate
 Maintainer: developlab

@@ -17,8 +17,10 @@
 
 // MARK: - 全局状态
 
-static double gFactor          = 0.001;
-static double gMinDurationMs   = 0.0;
+static double gFactor          = 0.02;
+static double gMinDurationMs   = 0.0;  // 0=不保护
+// 最小动画保障：某些系统操作不能太快，否则状态机错乱闪退
+static double gMinPageAnimSec  = 0.050;  // present/push/dismiss 跳转最小 50ms
 static BOOL   gInstantMode     = NO;
 static BOOL   gReduceMotion    = NO;
 static BOOL   gCatTransitions  = YES;
@@ -119,7 +121,10 @@ static void swizzleClass(Class cls, SEL orig, SEL repl) {
 + (void)as_animateWithDuration:(NSTimeInterval)d animations:(void(^)(void))a completion:(void(^)(BOOL))c {
     double f = _effectiveFactor();
     if (!gCatTransitions) { [self as_animateWithDuration:d animations:a completion:c]; return; }
-    [self as_animateWithDuration:_scaleInterval(d,f) animations:a completion:c];
+    // factor 极低时保持最小 16ms（1帧），防止 completion 在视图准备好前触发导致闪退
+    CFTimeInterval nd = _scaleInterval(d, f);
+    if (nd > 0 && nd < 0.016) nd = 0.016;
+    [self as_animateWithDuration:nd animations:a completion:c];
 }
 + (void)as_animateWithDuration:(NSTimeInterval)d delay:(NSTimeInterval)dl options:(UIViewAnimationOptions)o animations:(void(^)(void))a completion:(void(^)(BOOL))c {
     double f = _effectiveFactor();
@@ -255,17 +260,24 @@ static void swizzleClass(Class cls, SEL orig, SEL repl) {
 @interface UIViewController (ASTweak)
 @end
 @implementation UIViewController (ASTweak)
+// 页面 present 跳转，安全保 50ms 防止微信 webview 闪退
+static void _as_presentWithSafeDuration(UIViewController *self_, SEL _cmd, UIViewController *vc, BOOL an, void(^c)(void)) {
+    if (!an || vc==nil) { objc_msgSend(objc_msgSend(self_, NSSelectorFromString(@"as_presentViewController:animated:completion:")), NSSelectorFromString(@"as_presentViewController:animated:completion:"), vc, an, c); return; }
+    double f=_effectiveFactor();
+    double safeF=(f<0.05)?0.05:f;  // factor<0.05 时保 50ms
+    [CATransaction begin]; [CATransaction setAnimationDuration:safeF];
+    [self_ as_presentViewController:vc animated:YES completion:c];
+    [CATransaction commit];
+}
 - (void)as_presentViewController:(UIViewController*)vc animated:(BOOL)an completion:(void(^)(void))c {
     if (!an || !gCatTransitions) { [self as_presentViewController:vc animated:an completion:c]; return; }
-    double f=_effectiveFactor();
-    [CATransaction begin]; [CATransaction setAnimationDuration:f<=0?0:f];
-    [self as_presentViewController:vc animated:YES completion:c];
-    [CATransaction commit];
+    _as_presentWithSafeDuration(self, _cmd, vc, an, c);
 }
 - (void)as_dismissViewControllerAnimated:(BOOL)an completion:(void(^)(void))c {
     if (!an || !gCatTransitions) { [self as_dismissViewControllerAnimated:an completion:c]; return; }
     double f=_effectiveFactor();
-    [CATransaction begin]; [CATransaction setAnimationDuration:f<=0?0:f];
+    double safeF=(f<0.05)?0.05:f;
+    [CATransaction begin]; [CATransaction setAnimationDuration:safeF];
     [self as_dismissViewControllerAnimated:YES completion:c];
     [CATransaction commit];
 }
