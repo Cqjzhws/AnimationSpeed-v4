@@ -1,0 +1,76 @@
+name: Build AnimationSpeed v4
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build TIPA + dylib
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      # ══════════════════════════════════════════════════════════
+      # ① dylib（主要产物，纯 clang，无需 theos，最稳定）
+      # ══════════════════════════════════════════════════════════
+      - name: Build dylib (pure clang, no substrate)
+        id: dylib
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK: $SDK"
+          cd Tweak
+          clang -arch arm64 -dynamiclib \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=14.0 \
+            -undefined dynamic_lookup -fobjc-arc \
+            -framework Foundation \
+            -framework UIKit \
+            -framework QuartzCore \
+            -o AnimationSpeedTweak.dylib Tweak.m
+          echo "dylib size: $(du -h AnimationSpeedTweak.dylib)"
+          file AnimationSpeedTweak.dylib
+          mkdir -p ../artifacts
+          cp AnimationSpeedTweak.dylib ../artifacts/
+
+      # ══════════════════════════════════════════════════════════
+      # ② App .tipa（theos 工程，optional，失败不影响 dylib）
+      # ══════════════════════════════════════════════════════════
+      - name: Install theos deps (optional)
+        continue-on-error: true
+        run: |
+          brew install fakeroot || true
+          THEOS="${{ github.workspace }}/theos"
+          git clone --depth=1 https://github.com/theos/theos.git "$THEOS" || true
+          ls "$THEOS" 2>/dev/null || echo "theos skip"
+
+      - name: Build App (TIPA, optional)
+        continue-on-error: true
+        env:
+          THEOS: ${{ github.workspace }}/theos
+        run: |
+          make package FINALPACKAGE=1 2>&1 | tail -5
+          find . -name "*.tipa" -maxdepth 2 -exec cp {} artifacts/ \; 2>/dev/null || true
+
+      # ══════════════════════════════════════════════════════════
+      # ③ 上传产物
+      # ══════════════════════════════════════════════════════════
+      - name: Show artifacts
+        run: |
+          echo "=== artifacts/ ==="
+          ls -lh artifacts/ 2>/dev/null || echo "(empty)"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnimationSpeed-v4-artifacts
+          path: artifacts/
+          if-no-files-found: error
