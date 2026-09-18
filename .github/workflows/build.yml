@@ -7,13 +7,9 @@ on:
   pull_request:
     branches: [ main ]
 
-env:
-  THEOS: ${{ github.workspace }}/theos
-  SDK_VERSION: "iPhoneOS18.5.sdk"
-
 jobs:
   build:
-    name: Build TIPA + dylib
+    name: Build Tweak (dylib + TIPA)
     runs-on: macos-15
 
     steps:
@@ -24,9 +20,9 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
       # ══════════════════════════════════════════════════════════
-      # ① dylib（纯 clang，最稳定，先跑）
+      # ① dylib — 纯 clang，最稳定
       # ══════════════════════════════════════════════════════════
-      - name: Build dylib (pure clang, no substrate)
+      - name: Build dylib (pure clang)
         id: dylib
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -40,79 +36,78 @@ jobs:
             -framework UIKit \
             -framework QuartzCore \
             -o AnimationSpeedTweak.dylib Tweak.m
-          echo "dylib size: $(du -h AnimationSpeedTweak.dylib)"
-          file AnimationSpeedTweak.dylib
+          echo "dylib size: $(du -h AnimationSpeedTweak.dylib | cut -f1)"
           mkdir -p ../artifacts
           cp AnimationSpeedTweak.dylib ../artifacts/
+          echo "dylib_built=true" >> $GITHUB_OUTPUT
 
       # ══════════════════════════════════════════════════════════
-      # ② theos 安装（完整版：fakeroot + ldid + SDK）
+      # ② TIPA — theos 工程（可选，失败不阻断 dylib）
       # ══════════════════════════════════════════════════════════
-      - name: Install fakeroot
-        run: brew install fakeroot
-
-      - name: Install ldid (签名工具)
+      - name: Install theos + deps
+        id: theos_install
+        continue-on-error: true
         run: |
-          git clone --depth=1 https://github.com/ProcursusTeam/ldid.git ${{ github.workspace }}/ldid
-          cd ${{ github.workspace }}/ldid
-          make
-          cp ldid ${{ github.workspace }}/theos/bin/
-          chmod +x ${{ github.workspace }}/theos/bin/ldid
-          ${{ github.workspace }}/theos/bin/ldid -h 2>&1 | head -3
+          set -e
 
-      - name: Clone theos
-        run: |
-          git clone --depth=1 https://github.com/theos/theos.git "$THEOS"
+          # 安装 fakeroot（theos 打包需要）
+          if ! command -v fakeroot &>/dev/null; then
+            brew install fakeroot || true
+          fi
+          echo "fakeroot: $(command -v fakeroot || echo 'not found')"
+
+          # 安装 ldid（签名工具）
+          if [ ! -f /usr/local/bin/ldid ]; then
+            brew install ldid || curl -fsSL https://raw.githubusercontent.com/steakknife/ldid/master/ldid -o /usr/local/bin/ldid && chmod +x /usr/local/bin/ldid
+          fi
+          echo "ldid: $(command -v ldid || echo 'not found')"
+
+          # 克隆 theos（只做一次，缓存利用）
+          THEOS="${{ github.workspace }}/theos"
+          if [ ! -d "$THEOS" ]; then
+            git clone --depth=1 https://github.com/theos/theos.git "$THEOS"
+          fi
           echo "THEOS=$THEOS" >> $GITHUB_ENV
           ls "$THEOS"
+          echo "theos_installed=true" >> $GITHUB_OUTPUT
 
-      - name: Download iOS SDK (from Procursus CDN)
-        run: |
-          mkdir -p "$THEOS/sdks"
-          curl -Ls \
-            "https://github.com/theos/sdks/releases/download/master/iPhoneOS18.5.sdk.tar.zst" \
-            -o "$THEOS/sdks/iPhoneOS18.5.sdk.tar.zst"
-          tar -xf "$THEOS/sdks/iPhoneOS18.5.sdk.tar.zst" -C "$THEOS/sdks/"
-          rm "$THEOS/sdks/iPhoneOS18.5.sdk.tar.zst"
-          echo "SDK installed: $(ls $THEOS/sdks/)"
-
-      - name: Verify theos setup
-        run: |
-          echo "THEOS=$THEOS"
-          echo "THEOS_DEVICE_ADDR=127.0.0.1"
-          echo "THEOS_DEVICE_PORT=2222"
-          ls "$THEOS/bin/ldid"
-          ls "$THEOS/sdks/"
-
-      # ══════════════════════════════════════════════════════════
-      # ③ Build TIPA
-      # ══════════════════════════════════════════════════════════
       - name: Build App (TIPA)
+        if: steps.theos_install.outputs.theos_installed == 'true'
+        continue-on-error: true
         env:
-          THEOS_DEVICE_ADDR: localhost
-          THEOS_DEVICE_PORT: 2222
-          LDID: ${{ github.workspace }}/theos/bin/ldid
+          THEOS: ${{ github.workspace }}/theos
         run: |
-          export THEOS="$THEOS"
-          cd ${{ github.workspace }}
+          set -e
+          cd /home/runner/work/AnimationSpeed-v4/AnimationSpeed-v4
           pwd
           ls -la
-          make package FINALPACKAGE=1 THEOS="$THEOS" 2>&1
-          echo "=== packages/ ==="
-          find . -name "*.tipa" -o -name "*.ipa" | head -10
-          ls -la packages/ 2>/dev/null || echo "no packages dir"
 
-      - name: Copy TIPA to artifacts
+          # theos 环境变量
+          export THEOS="${{ github.workspace }}/theos"
+          export PATH="$THEOS/bin:$PATH"
+
+          make clean 2>/dev/null || true
+          make package FINALPACKAGE=1 2>&1 | tail -20
+
+          # 找 .tipa 或 .ipa 产物
+          find . -name "*.tipa" -o -name "*.ipa" | while read f; do
+            echo "Found: $f ($(du -h "$f" | cut -f1))"
+            cp "$f" artifacts/ 2>/dev/null && echo "copied to artifacts/"
+          done
+
+          ls -la artifacts/ 2>/dev/null || echo "(no artifacts dir)"
+
+      # ══════════════════════════════════════════════════════════
+      # ③ 显示产物
+      # ══════════════════════════════════════════════════════════
+      - name: Show artifacts
         run: |
-          mkdir -p artifacts
-          find . -name "*.tipa" -maxdepth 2 -exec cp {} artifacts/ \; 2>/dev/null
-          find . -name "*.ipa" -maxdepth 2 -exec cp {} artifacts/ \; 2>/dev/null
-          echo "=== artifacts ==="
-          ls -lh artifacts/
+          echo "=== artifacts/ ==="
+          ls -lh artifacts/ 2>/dev/null || echo "(empty)"
+          echo ""
+          echo "=== dylib info ==="
+          file artifacts/AnimationSpeedTweak.dylib 2>/dev/null || echo "no dylib"
 
-      # ══════════════════════════════════════════════════════════
-      # ④ 上传产物
-      # ══════════════════════════════════════════════════════════
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
