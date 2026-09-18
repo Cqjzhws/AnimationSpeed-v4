@@ -336,21 +336,7 @@ static void _install(void) {
         NSLog(@"[AnimationSpeedTweak v3.5] installed extra risky hooks %d/%d", ok2, total2);
     }
 
-    // HUD 横幅（延迟 1s 显示，确认注入成功）
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        UIWindow *win = UIApplication.sharedApplication.windows.firstObject;
-        if (!win) return;
-        UIView *bar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, win.bounds.size.width, 24)];
-        bar.backgroundColor = [UIColor colorWithRed:0 green:0.5 blue:1 alpha:0.85];
-        bar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-        UILabel *lbl = [[UILabel alloc] initWithFrame:bar.bounds];
-        lbl.text = [NSString stringWithFormat:@"AST v3.5 %@ factor=%.4f",
-                    gSafeProfile ? @"SAFE" : @"BROAD", _effectiveFactor()];
-        lbl.textColor = [UIColor whiteColor]; lbl.font = [UIFont systemFontOfSize:12];
-        lbl.textAlignment = NSTextAlignmentCenter;
-        [bar addSubview:lbl]; [win addSubview:bar];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [bar removeFromSuperview]; });
-    });
+    // （HUD 横幅已移除：不再显示蓝色背景文字图层）
 }
 
 // MARK: - 构造器
