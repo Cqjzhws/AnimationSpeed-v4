@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build Tweak (dylib + TIPA)
+    name: Build dylib + IPA
     runs-on: macos-15
 
     steps:
@@ -20,7 +20,7 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
       # ══════════════════════════════════════════════════════════
-      # ① dylib — 纯 clang，最稳定
+      # ① dylib — 纯 clang，无需 theos，最稳定
       # ══════════════════════════════════════════════════════════
       - name: Build dylib (pure clang)
         id: dylib
@@ -39,64 +39,59 @@ jobs:
           echo "dylib size: $(du -h AnimationSpeedTweak.dylib | cut -f1)"
           mkdir -p ../artifacts
           cp AnimationSpeedTweak.dylib ../artifacts/
-          echo "dylib_built=true" >> $GITHUB_OUTPUT
 
       # ══════════════════════════════════════════════════════════
-      # ② TIPA — theos 工程（可选，失败不阻断 dylib）
+      # ② IPA — Xcode xcodebuild，不需要 theos，不需要 dm.pl
       # ══════════════════════════════════════════════════════════
-      - name: Install theos + deps
-        id: theos_install
+      - name: Build App & IPA
+        id: ipa
         continue-on-error: true
-        run: |
-          set -e
-
-          # 安装 fakeroot（theos 打包需要）
-          if ! command -v fakeroot &>/dev/null; then
-            brew install fakeroot || true
-          fi
-          echo "fakeroot: $(command -v fakeroot || echo 'not found')"
-
-          # 安装 ldid（签名工具，brew 安装在 /opt/homebrew/bin/ldid）
-          if ! command -v ldid &>/dev/null; then
-            brew install ldid
-          fi
-          echo "ldid: $(command -v ldid || echo 'not found')"
-
-          # 克隆 theos（只做一次，缓存利用）
-          THEOS="${{ github.workspace }}/theos"
-          if [ ! -d "$THEOS" ]; then
-            git clone --depth=1 https://github.com/theos/theos.git "$THEOS"
-          fi
-          echo "THEOS=$THEOS" >> $GITHUB_ENV
-          ls "$THEOS"
-          echo "theos_installed=true" >> $GITHUB_OUTPUT
-
-      - name: Build App (TIPA)
-        if: steps.theos_install.outputs.theos_installed == 'true'
-        continue-on-error: true
-        env:
-          THEOS: ${{ github.workspace }}/theos
         run: |
           set -e
           WS="${{ github.workspace }}"
           cd "$WS"
-          pwd
-          ls -la
 
-          # theos 环境变量
-          export THEOS="$WS/theos"
-          export PATH="$THEOS/bin:$PATH"
+          # Xcode 项目名
+          SCHEME="AnimationSpeed"
+          CONFIG="Release"
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          DST="generic/platform=iOS"
 
-          make clean 2>/dev/null || true
-          make package FINALPACKAGE=1 2>&1 | tail -20
+          echo "=== Build Xcode project ==="
+          xcodebuild -project AnimationSpeed.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIG" \
+            -destination "$DST" \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            IPHONEOS_DEPLOYMENT_TARGET=14.0 \
+            SWIFT_VERSION=5.0 \
+            -archivePath build/AnimationSpeed \
+            -archive
 
-          # 找 .tipa 或 .ipa 产物
-          find . -name "*.tipa" -o -name "*.ipa" | while read f; do
-            echo "Found: $f ($(du -h "$f" | cut -f1))"
-            cp "$f" artifacts/ 2>/dev/null && echo "copied to artifacts/"
-          done
+          echo ""
+          echo "=== Package as .ipa ==="
+          # IPA = zip 格式的 .app 目录
+          mkdir -p artifacts
 
-          ls -la artifacts/ 2>/dev/null || echo "(no artifacts dir)"
+          APP_PATH="build/AnimationSpeed.xcarchive/Products/Applications/AnimationSpeed.app"
+          if [ -d "$APP_PATH" ]; then
+            echo "Found app: $APP_PATH"
+            echo "App size: $(du -sh "$APP_PATH" | cut -f1)"
+            # 打 zip，改扩展名为 .ipa（TrollStore 接受）
+            cd "$(dirname "$APP_PATH")"
+            zip -r "$WS/artifacts/AnimationSpeed_4.0.0.ipa" "$(basename "$APP_PATH")" -x "*.DS_Store"
+            echo "IPA created: $(du -h "$WS/artifacts/AnimationSpeed_4.0.0.ipa" | cut -f1)"
+          else
+            echo "ERROR: App bundle not found at $APP_PATH"
+            ls build/AnimationSpeed.xcarchive/Products/Applications/ 2>/dev/null || echo "No Applications dir"
+            find build/ -name "*.app" 2>/dev/null || echo "No .app found"
+          fi
+
+          echo ""
+          echo "=== artifacts/ ==="
+          ls -lh artifacts/
 
       # ══════════════════════════════════════════════════════════
       # ③ 显示产物
@@ -105,9 +100,6 @@ jobs:
         run: |
           echo "=== artifacts/ ==="
           ls -lh artifacts/ 2>/dev/null || echo "(empty)"
-          echo ""
-          echo "=== dylib info ==="
-          file artifacts/AnimationSpeedTweak.dylib 2>/dev/null || echo "no dylib"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
