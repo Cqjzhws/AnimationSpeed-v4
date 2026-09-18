@@ -264,6 +264,36 @@ static BOOL _swizzleClass(Class cls, SEL orig, SEL repl) {
     [self as_CAProp_setDuration:_scaleVC(d, f, 16)];
 }
 
+// 禁用 CALayer 所有隐式动画（位置/透明度/ bounds 变化瞬发），第一版快感的来源
++ (id)as_CALayer_actionForKey:(NSString *)key {
+    return nil;
+}
+
+// 关键帧动画也压到瞬时
++ (void)as_UIView_animateKeyframes:(NSTimeInterval)d
+                             delay:(NSTimeInterval)dl
+                           options:(UIViewKeyframeAnimationOptions)o
+                        animations:(void (^)(void))a
+                        completion:(void (^)(BOOL))c {
+    double f = _effectiveFactor();
+    [self as_UIView_animateKeyframes:_scaleInterval(d, f) delay:dl * f options:o animations:a completion:c];
+}
+
+// 滚动减速：创建即设为 fast，松手即停，跟手感拉满
+- (instancetype)as_UISV_initWithFrame:(CGRect)r {
+    id s = [self as_UISV_initWithFrame:r];
+    if ([s respondsToSelector:@selector(setDecelerationRate:)])
+        [(UIScrollView *)s setDecelerationRate:UIScrollViewDecelerationRateFast];
+    return s;
+}
+
+- (instancetype)as_UISV_initWithCoder:(NSCoder *)c {
+    id s = [self as_UISV_initWithCoder:c];
+    if ([s respondsToSelector:@selector(setDecelerationRate:)])
+        [(UIScrollView *)s setDecelerationRate:UIScrollViewDecelerationRateFast];
+    return s;
+}
+
 @end
 
 __attribute__((constructor))
@@ -334,6 +364,22 @@ static void _astweak_install(void) {
         ok += _swizzleClass([CAPropertyAnimation class], @selector(setDuration:),
                             @selector(as_CAProp_setDuration:));
 
+        // 第一版覆盖补充：CALayer 隐式动画 + 关键帧 + 滚动减速
+        Class CALayer_cls = [CALayer class];
+        total += 1;
+        ok += _swizzleInstance(CALayer_cls, @selector(actionForKey:),
+                               @selector(as_CALayer_actionForKey:));
+
+        total += 1;
+        ok += _swizzleClass(UIView_cls, @selector(animateKeyframesWithDuration:delay:options:animations:completion:),
+                            @selector(as_UIView_animateKeyframes:delay:options:animations:completion:));
+
+        total += 2;
+        ok += _swizzleInstance(UISV_cls, @selector(initWithFrame:),
+                               @selector(as_UISV_initWithFrame:));
+        ok += _swizzleInstance(UISV_cls, @selector(initWithCoder:),
+                               @selector(as_UISV_initWithCoder:));
+
         NSLog(@"[AnimationSpeedTweak] installed %d/%d hooks", ok, total);
 
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -341,8 +387,7 @@ static void _astweak_install(void) {
             if (!win) win = UIApplication.sharedApplication.windows.firstObject;
             if (!win) return;
             UILabel *hud = [[UILabel alloc] initWithFrame:CGRectZero];
-            NSString *mode = gInstantMode ? @"INSTANT" : [NSString stringWithFormat:@"%.4f", gFactor];
-            hud.text = [NSString stringWithFormat:@"AnimationSpeed  %d/%d  %@", ok, total, mode];
+            hud.text = [NSString stringWithFormat:@"iPhone14pro专用  %d/%d", ok, total];
             hud.textAlignment = NSTextAlignmentCenter;
             hud.textColor = [UIColor whiteColor];
             hud.font = [UIFont boldSystemFontOfSize:13];
