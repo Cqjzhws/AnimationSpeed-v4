@@ -15,7 +15,6 @@ static double _effectiveFactor(void) {
     return gFactor;
 }
 
-// 普通缩放：小值不动，超过 minMs 才缩
 static inline NSTimeInterval _scaleInterval(NSTimeInterval t, double f) {
     if (gInstantMode) return 0.0;
     if (t <= 0) return t;
@@ -23,7 +22,6 @@ static inline NSTimeInterval _scaleInterval(NSTimeInterval t, double f) {
     return (s < 0.016 && s > 0) ? 0.016 : s;
 }
 
-// VC 级缩放：保底 minMs 毫秒，防止闪退
 static inline NSTimeInterval _scaleVC(NSTimeInterval t, double f, double minMs) {
     if (gInstantMode) return 0.0;
     if (t <= 0) return t;
@@ -34,49 +32,52 @@ static inline NSTimeInterval _scaleVC(NSTimeInterval t, double f, double minMs) 
 }
 
 // ================================
-// Swizzle 辅助
-// 关键点：as_* 替换方法定义在 AnimationSpeedTweak 上，
-// 必须先把它 ADD 到目标类（或元类），再交换，否则查不到 → 静默跳过。
+// Swizzle 辅助（修复版：替换方法必须桥接到目标类）
 // ================================
-static void _swizzleInstance(Class cls, SEL orig, SEL repl) {
-    if (!cls) return;
+static BOOL _swizzleInstance(Class cls, SEL orig, SEL repl) {
+    if (!cls) { NSLog(@"[AST] skip nil cls for %@", NSStringFromSelector(orig)); return NO; }
     Method origMethod = class_getInstanceMethod(cls, orig);
     Method replMethod = class_getInstanceMethod(objc_getClass("AnimationSpeedTweak"), repl);
-    if (!origMethod || !replMethod) return;
+    if (!origMethod) { NSLog(@"[AST] MISSING orig %@ on %@", NSStringFromSelector(orig), cls); return NO; }
+    if (!replMethod) { NSLog(@"[AST] MISSING repl %@ on AnimationSpeedTweak", NSStringFromSelector(repl)); return NO; }
     IMP replImp = method_getImplementation(replMethod);
     const char *types = method_getTypeEncoding(replMethod);
-    if (class_addMethod(cls, repl, replImp, types)) {
-        Method replInCls = class_getInstanceMethod(cls, repl);
-        method_exchangeImplementations(origMethod, replInCls);
-    } else {
-        Method replInCls = class_getInstanceMethod(cls, repl);
-        if (replInCls) method_exchangeImplementations(origMethod, replInCls);
+    if (!class_addMethod(cls, repl, replImp, types)) {
+        Method existing = class_getInstanceMethod(cls, repl);
+        if (existing) { method_exchangeImplementations(origMethod, existing); return YES; }
+        NSLog(@"[AST] FAIL add %@ to %@", NSStringFromSelector(repl), cls);
+        return NO;
     }
+    Method replInCls = class_getInstanceMethod(cls, repl);
+    method_exchangeImplementations(origMethod, replInCls);
+    return YES;
 }
 
-static void _swizzleClass(Class cls, SEL orig, SEL repl) {
-    if (!cls) return;
+static BOOL _swizzleClass(Class cls, SEL orig, SEL repl) {
+    if (!cls) { NSLog(@"[AST] skip nil cls for %@", NSStringFromSelector(orig)); return NO; }
     Method origMethod = class_getClassMethod(cls, orig);
     Method replMethod = class_getClassMethod(objc_getClass("AnimationSpeedTweak"), repl);
-    if (!origMethod || !replMethod) return;
+    if (!origMethod) { NSLog(@"[AST] MISSING orig %@ on %@", NSStringFromSelector(orig), cls); return NO; }
+    if (!replMethod) { NSLog(@"[AST] MISSING repl %@ on AnimationSpeedTweak", NSStringFromSelector(repl)); return NO; }
     IMP replImp = method_getImplementation(replMethod);
     const char *types = method_getTypeEncoding(replMethod);
     Class meta = object_getClass(cls);
-    if (class_addMethod(meta, repl, replImp, types)) {
-        Method replInMeta = class_getClassMethod(cls, repl);
-        method_exchangeImplementations(origMethod, replInMeta);
-    } else {
-        Method replInMeta = class_getClassMethod(cls, repl);
-        if (replInMeta) method_exchangeImplementations(origMethod, replInMeta);
+    if (!class_addMethod(meta, repl, replImp, types)) {
+        Method existing = class_getClassMethod(cls, repl);
+        if (existing) { method_exchangeImplementations(origMethod, existing); return YES; }
+        NSLog(@"[AST] FAIL add %@ to meta %@", NSStringFromSelector(repl), cls);
+        return NO;
     }
+    Method replInMeta = class_getClassMethod(cls, repl);
+    method_exchangeImplementations(origMethod, replInMeta);
+    return YES;
 }
 
 // ================================
-// AnimationSpeedTweak
+// 替换实现（定义在 AnimationSpeedTweak 上，运行时桥接到目标类）
 // ================================
 @implementation AnimationSpeedTweak
 
-// MARK: UIView animateWithDuration 全家桶
 + (void)as_UIView_animate:(NSTimeInterval)d
                animations:(void (^)(void))a {
     double f = _effectiveFactor();
@@ -120,7 +121,6 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
                   completion:c];
 }
 
-// MARK: UIView transition
 + (void)as_UIView_transitionWithView:(UIView *)vw
                              duration:(NSTimeInterval)d
                               options:(UIViewAnimationOptions)o
@@ -139,7 +139,6 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
     [self as_UIView_transitionFromView:fv toView:tv duration:_scaleInterval(d, f) options:o completion:c];
 }
 
-// MARK: UIViewPropertyAnimator
 - (instancetype)as_UIPA_initDuration:(NSTimeInterval)d
                     timingParameters:(id<UITimingCurveProvider>)tp {
     double f = _effectiveFactor();
@@ -158,7 +157,6 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
     [self as_UIPA_setDuration:_scaleInterval(d, f)];
 }
 
-// MARK: UIScrollView
 - (void)as_UISV_setContentOffset:(CGPoint)o animated:(BOOL)an {
     if (!an) { [self as_UISV_setContentOffset:o animated:an]; return; }
     double f = _effectiveFactor();
@@ -179,7 +177,6 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
                      completion:nil];
 }
 
-// MARK: UINavigationController — push/pop（保底 50ms）
 - (void)as_Nav_pushViewController:(UIViewController *)vc animated:(BOOL)an {
     if (!an) { [self as_Nav_pushViewController:vc animated:an]; return; }
     double f = _effectiveFactor();
@@ -226,7 +223,6 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
     return result;
 }
 
-// MARK: UITabBarController — tab 切换（保底 50ms）
 - (void)as_Tab_setSelectedIndex:(NSUInteger)idx {
     double f = _effectiveFactor();
     [UIView animateWithDuration:_scaleVC(0.25, f, 50)
@@ -236,7 +232,6 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
                      completion:nil];
 }
 
-// MARK: UIViewController — present/dismiss（保底 100ms，最敏感）
 - (void)as_VC_presentViewController:(UIViewController *)vc
                            animated:(BOOL)an
                          completion:(void (^)(void))c {
@@ -259,13 +254,11 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
     }
 }
 
-// MARK: CATransaction（保底 16ms）
 + (void)as_CATrans_setDuration:(CFTimeInterval)d {
     double f = _effectiveFactor();
     [self as_CATrans_setDuration:_scaleVC(d, f, 16)];
 }
 
-// MARK: CAPropertyAnimation（保底 16ms）
 + (void)as_CAProp_setDuration:(CFTimeInterval)d {
     double f = _effectiveFactor();
     [self as_CAProp_setDuration:_scaleVC(d, f, 16)];
@@ -273,84 +266,82 @@ static void _swizzleClass(Class cls, SEL orig, SEL repl) {
 
 @end
 
-// ================================
-// 安装全部 Hook + 启动确认横幅
-// ================================
 __attribute__((constructor))
 static void _astweak_install(void) {
     @autoreleasepool {
         double f = _effectiveFactor();
-        NSLog(@"[AnimationSpeedTweak] factor=%.3f instant=%d", f, gInstantMode);
+        NSLog(@"[AnimationSpeedTweak] factor=%.4f instant=%d", f, gInstantMode);
 
-        // UIView 动画类方法
+        int ok = 0, total = 0;
+
         Class UIView_cls = [UIView class];
-        _swizzleClass(UIView_cls, @selector(animateWithDuration:animations:),
-                      @selector(as_UIView_animate:animations:));
-        _swizzleClass(UIView_cls, @selector(animateWithDuration:animations:completion:),
-                      @selector(as_UIView_animate:animations:completion:));
-        _swizzleClass(UIView_cls, @selector(animateWithDuration:delay:options:animations:completion:),
-                      @selector(as_UIView_animate:delay:options:animations:completion:));
-        _swizzleClass(UIView_cls, @selector(animateWithDuration:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:),
-                      @selector(as_UIView_animate:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:));
-        _swizzleClass(UIView_cls, @selector(transitionWithView:duration:options:animations:completion:),
-                      @selector(as_UIView_transitionWithView:duration:options:animations:completion:));
-        _swizzleClass(UIView_cls, @selector(transitionFromView:toView:duration:options:completion:),
-                      @selector(as_UIView_transitionFromView:toView:duration:options:completion:));
+        total += 6;
+        ok += _swizzleClass(UIView_cls, @selector(animateWithDuration:animations:),
+                            @selector(as_UIView_animate:animations:));
+        ok += _swizzleClass(UIView_cls, @selector(animateWithDuration:animations:completion:),
+                            @selector(as_UIView_animate:animations:completion:));
+        ok += _swizzleClass(UIView_cls, @selector(animateWithDuration:delay:options:animations:completion:),
+                            @selector(as_UIView_animate:delay:options:animations:completion:));
+        ok += _swizzleClass(UIView_cls, @selector(animateWithDuration:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:),
+                            @selector(as_UIView_animate:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:));
+        ok += _swizzleClass(UIView_cls, @selector(transitionWithView:duration:options:animations:completion:),
+                            @selector(as_UIView_transitionWithView:duration:options:animations:completion:));
+        ok += _swizzleClass(UIView_cls, @selector(transitionFromView:toView:duration:options:completion:),
+                            @selector(as_UIView_transitionFromView:toView:duration:options:completion:));
 
-        // UIViewPropertyAnimator
         Class UIPA_cls = [UIViewPropertyAnimator class];
-        _swizzleInstance(UIPA_cls, @selector(initWithDuration:timingParameters:),
-                         @selector(as_UIPA_initDuration:timingParameters:));
-        _swizzleInstance(UIPA_cls, @selector(initWithDuration:dampingRatio:animations:),
-                         @selector(as_UIPA_initDuration:dampingRatio:animations:));
-        _swizzleInstance(UIPA_cls, @selector(setDuration:),
-                         @selector(as_UIPA_setDuration:));
+        total += 3;
+        ok += _swizzleInstance(UIPA_cls, @selector(initWithDuration:timingParameters:),
+                               @selector(as_UIPA_initDuration:timingParameters:));
+        ok += _swizzleInstance(UIPA_cls, @selector(initWithDuration:dampingRatio:animations:),
+                               @selector(as_UIPA_initDuration:dampingRatio:animations:));
+        ok += _swizzleInstance(UIPA_cls, @selector(setDuration:),
+                               @selector(as_UIPA_setDuration:));
 
-        // UIScrollView
         Class UISV_cls = [UIScrollView class];
-        _swizzleInstance(UISV_cls, @selector(setContentOffset:animated:),
-                         @selector(as_UISV_setContentOffset:animated:));
-        _swizzleInstance(UISV_cls, @selector(scrollRectToVisible:animated:),
-                         @selector(as_UISV_scrollRectToVisible:animated:));
+        total += 2;
+        ok += _swizzleInstance(UISV_cls, @selector(setContentOffset:animated:),
+                               @selector(as_UISV_setContentOffset:animated:));
+        ok += _swizzleInstance(UISV_cls, @selector(scrollRectToVisible:animated:),
+                               @selector(as_UISV_scrollRectToVisible:animated:));
 
-        // UINavigationController
         Class Nav_cls = [UINavigationController class];
-        _swizzleInstance(Nav_cls, @selector(pushViewController:animated:),
-                         @selector(as_Nav_pushViewController:animated:));
-        _swizzleInstance(Nav_cls, @selector(popViewControllerAnimated:),
-                         @selector(as_Nav_popViewControllerAnimated:));
-        _swizzleInstance(Nav_cls, @selector(popToViewController:animated:),
-                         @selector(as_Nav_popToViewController:animated:));
-        _swizzleInstance(Nav_cls, @selector(popToRootViewControllerAnimated:),
-                         @selector(as_Nav_popToRootViewControllerAnimated:));
+        total += 4;
+        ok += _swizzleInstance(Nav_cls, @selector(pushViewController:animated:),
+                               @selector(as_Nav_pushViewController:animated:));
+        ok += _swizzleInstance(Nav_cls, @selector(popViewControllerAnimated:),
+                               @selector(as_Nav_popViewControllerAnimated:));
+        ok += _swizzleInstance(Nav_cls, @selector(popToViewController:animated:),
+                               @selector(as_Nav_popToViewController:animated:));
+        ok += _swizzleInstance(Nav_cls, @selector(popToRootViewControllerAnimated:),
+                               @selector(as_Nav_popToRootViewControllerAnimated:));
 
-        // UITabBarController
         Class Tab_cls = [UITabBarController class];
-        _swizzleInstance(Tab_cls, @selector(setSelectedIndex:),
-                         @selector(as_Tab_setSelectedIndex:));
+        total += 1;
+        ok += _swizzleInstance(Tab_cls, @selector(setSelectedIndex:),
+                               @selector(as_Tab_setSelectedIndex:));
 
-        // UIViewController present/dismiss
         Class VC_cls = [UIViewController class];
-        _swizzleInstance(VC_cls, @selector(presentViewController:animated:completion:),
-                         @selector(as_VC_presentViewController:animated:completion:));
-        _swizzleInstance(VC_cls, @selector(dismissViewControllerAnimated:completion:),
-                         @selector(as_VC_dismissViewControllerAnimated:completion:));
+        total += 2;
+        ok += _swizzleInstance(VC_cls, @selector(presentViewController:animated:completion:),
+                               @selector(as_VC_presentViewController:animated:completion:));
+        ok += _swizzleInstance(VC_cls, @selector(dismissViewControllerAnimated:completion:),
+                               @selector(as_VC_dismissViewControllerAnimated:completion:));
 
-        // CATransaction / CAPropertyAnimation
-        _swizzleClass([CATransaction class], @selector(setAnimationDuration:),
-                      @selector(as_CATrans_setDuration:));
-        _swizzleClass([CAPropertyAnimation class], @selector(setDuration:),
-                      @selector(as_CAProp_setDuration:));
+        total += 2;
+        ok += _swizzleClass([CATransaction class], @selector(setAnimationDuration:),
+                            @selector(as_CATrans_setDuration:));
+        ok += _swizzleClass([CAPropertyAnimation class], @selector(setDuration:),
+                            @selector(as_CAProp_setDuration:));
 
-        NSLog(@"[AnimationSpeedTweak] all hooks installed OK (19 total)");
+        NSLog(@"[AnimationSpeedTweak] installed %d/%d hooks", ok, total);
 
-        // 启动确认横幅：注入成功会出现 2.5 秒
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             UIWindow *win = UIApplication.sharedApplication.keyWindow;
             if (!win) win = UIApplication.sharedApplication.windows.firstObject;
             if (!win) return;
             UILabel *hud = [[UILabel alloc] initWithFrame:CGRectZero];
-            hud.text = [NSString stringWithFormat:@"⚡ AnimationSpeed v5  f=%.3f", gFactor];
+            hud.text = [NSString stringWithFormat:@"AnimationSpeed v6  %d/%d  f=%.4f", ok, total, gFactor];
             hud.textAlignment = NSTextAlignmentCenter;
             hud.textColor = [UIColor whiteColor];
             hud.font = [UIFont boldSystemFontOfSize:13];
