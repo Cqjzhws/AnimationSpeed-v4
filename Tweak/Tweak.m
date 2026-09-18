@@ -17,7 +17,7 @@
 
 // MARK: - 全局状态
 
-static double gFactor          = 0.010;  // 非微信 App 广覆盖档
+static double gFactor          = 0.001;  // 非微信 App 广覆盖档
 static double gWeChatFactor   = 0.001;  // 微信安全档（v6 实测稳定）
 static BOOL   gSafeProfile     = NO;     // YES=微信：只装安全 hook 集（含 CALayer/C AAnim）
 static BOOL   gInstantMode     = NO;
