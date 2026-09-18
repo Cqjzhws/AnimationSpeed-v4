@@ -77,8 +77,14 @@ jobs:
           echo "Found: $APP_PATH"
           if [ -n "$APP_PATH" ] && [ -d "$APP_PATH" ]; then
             echo "App size: $(du -sh "$APP_PATH" | cut -f1)"
-            mkdir -p "$WS/artifacts"
 
+            # 用 codesign 强制重签，加 entitlements（TrollStore 需要 no-sandbox）
+            ENT="$WS/entitlements.plist"
+            echo "Signing with entitlements: $ENT"
+            codesign --force --sign - --entitlements "$ENT" --deep "$APP_PATH" 2>&1 | tail -5
+            echo "Verify: $(codesign -d --entitlements - "$APP_PATH" 2>&1 | grep -c no-sandbox) entitlements lines"
+
+            mkdir -p "$WS/artifacts"
             # TrollStore 要求的 IPA 格式: Payload/AppName.app/
             STAGE="$WS/build/ipa_stage"
             rm -rf "$STAGE"
