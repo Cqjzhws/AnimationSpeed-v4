@@ -56,9 +56,9 @@ jobs:
           fi
           echo "fakeroot: $(command -v fakeroot || echo 'not found')"
 
-          # 安装 ldid（签名工具）
-          if [ ! -f /usr/local/bin/ldid ]; then
-            brew install ldid || curl -fsSL https://raw.githubusercontent.com/steakknife/ldid/master/ldid -o /usr/local/bin/ldid && chmod +x /usr/local/bin/ldid
+          # 安装 ldid（签名工具，brew 安装在 /opt/homebrew/bin/ldid）
+          if ! command -v ldid &>/dev/null; then
+            brew install ldid
           fi
           echo "ldid: $(command -v ldid || echo 'not found')"
 
