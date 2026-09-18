@@ -4,7 +4,7 @@
 // ================================
 // 全局配置（运行时可热改）
 // ================================
-static double gFactor = 0.10;
+static double gFactor = 0.001;
 static NSTimeInterval gMinDurationMs = 0;
 static BOOL gInstantMode = NO;
 
