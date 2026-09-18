@@ -104,6 +104,9 @@ static BOOL _swizzleClass(Class cls, SEL orig, SEL repl) {
 
 // MARK: - AnimationSpeedTweak 方法实现（全部是 class method，供 swizzle 桥接用）
 
+@interface AnimationSpeedTweak : NSObject
+@end
+
 @implementation AnimationSpeedTweak
 
 // UIView animateWithDuration:animations:
@@ -215,6 +218,10 @@ static BOOL _swizzleClass(Class cls, SEL orig, SEL repl) {
 @end
 
 // MARK: - 激进 hook 方法（仅非 safe profile 安装）
+
+@interface CAAnimation (ASTweak)
+- (void)as_CAAnim_setDuration:(CFTimeInterval)d;
+@end
 
 @interface CALayer (ASTweak_Risky)
 @end
@@ -328,7 +335,7 @@ static void _install(void) {
 
     // HUD 横幅（延迟 1s 显示，确认注入成功）
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        UIWindow *win = UIApplication.sharedApplication.keyWindow;
+        UIWindow *win = UIApplication.sharedApplication.windows.firstObject;
         if (!win) return;
         UIView *bar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, win.bounds.size.width, 24)];
         bar.backgroundColor = [UIColor colorWithRed:0 green:0.5 blue:1 alpha:0.85];
