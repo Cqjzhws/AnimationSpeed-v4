@@ -4,7 +4,7 @@
 // ================================
 // 全局配置
 // ================================
-static double gFactor = 0.01;
+static double gFactor = 0.001;
 static BOOL gInstantMode = NO;
 
 // ================================
@@ -35,19 +35,40 @@ static inline NSTimeInterval _scaleVC(NSTimeInterval t, double f, double minMs) 
 
 // ================================
 // Swizzle 辅助
+// 关键点：as_* 替换方法定义在 AnimationSpeedTweak 上，
+// 必须先把它 ADD 到目标类（或元类），再交换，否则查不到 → 静默跳过。
 // ================================
 static void _swizzleInstance(Class cls, SEL orig, SEL repl) {
     if (!cls) return;
-    Method m = class_getInstanceMethod(cls, orig);
-    Method m2 = class_getInstanceMethod(cls, repl);
-    if (m && m2) method_exchangeImplementations(m, m2);
+    Method origMethod = class_getInstanceMethod(cls, orig);
+    Method replMethod = class_getInstanceMethod(objc_getClass("AnimationSpeedTweak"), repl);
+    if (!origMethod || !replMethod) return;
+    IMP replImp = method_getImplementation(replMethod);
+    const char *types = method_getTypeEncoding(replMethod);
+    if (class_addMethod(cls, repl, replImp, types)) {
+        Method replInCls = class_getInstanceMethod(cls, repl);
+        method_exchangeImplementations(origMethod, replInCls);
+    } else {
+        Method replInCls = class_getInstanceMethod(cls, repl);
+        if (replInCls) method_exchangeImplementations(origMethod, replInCls);
+    }
 }
 
 static void _swizzleClass(Class cls, SEL orig, SEL repl) {
     if (!cls) return;
-    Method m = class_getClassMethod(cls, orig);
-    Method m2 = class_getClassMethod(cls, repl);
-    if (m && m2) method_exchangeImplementations(m, m2);
+    Method origMethod = class_getClassMethod(cls, orig);
+    Method replMethod = class_getClassMethod(objc_getClass("AnimationSpeedTweak"), repl);
+    if (!origMethod || !replMethod) return;
+    IMP replImp = method_getImplementation(replMethod);
+    const char *types = method_getTypeEncoding(replMethod);
+    Class meta = object_getClass(cls);
+    if (class_addMethod(meta, repl, replImp, types)) {
+        Method replInMeta = class_getClassMethod(cls, repl);
+        method_exchangeImplementations(origMethod, replInMeta);
+    } else {
+        Method replInMeta = class_getClassMethod(cls, repl);
+        if (replInMeta) method_exchangeImplementations(origMethod, replInMeta);
+    }
 }
 
 // ================================
