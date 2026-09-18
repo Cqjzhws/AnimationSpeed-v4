@@ -259,18 +259,13 @@ static void swizzleClass(Class cls, SEL orig, SEL repl) {
 @interface UIViewController (ASTweak)
 @end
 @implementation UIViewController (ASTweak)
-// 页面 present 跳转，安全保 50ms 防止微信 webview 闪退
-static void _as_presentWithSafeDuration(UIViewController *self_, SEL _cmd, UIViewController *vc, BOOL an, void(^c)(void)) {
-    if (!an || vc==nil) { objc_msgSend(objc_msgSend(self_, NSSelectorFromString(@"as_presentViewController:animated:completion:")), NSSelectorFromString(@"as_presentViewController:animated:completion:"), vc, an, c); return; }
-    double f=_effectiveFactor();
-    double safeF=(f<0.05)?0.05:f;  // factor<0.05 时保 50ms
-    [CATransaction begin]; [CATransaction setAnimationDuration:safeF];
-    [self_ as_presentViewController:vc animated:YES completion:c];
-    [CATransaction commit];
-}
 - (void)as_presentViewController:(UIViewController*)vc animated:(BOOL)an completion:(void(^)(void))c {
     if (!an || !gCatTransitions) { [self as_presentViewController:vc animated:an completion:c]; return; }
-    _as_presentWithSafeDuration(self, _cmd, vc, an, c);
+    double f = _effectiveFactor();
+    double safeF = (f < 0.05) ? 0.05 : f;  // 保 50ms，防止微信闪退
+    [CATransaction begin]; [CATransaction setAnimationDuration:safeF];
+    [self as_presentViewController:vc animated:YES completion:c];
+    [CATransaction commit];
 }
 - (void)as_dismissViewControllerAnimated:(BOOL)an completion:(void(^)(void))c {
     if (!an || !gCatTransitions) { [self as_dismissViewControllerAnimated:an completion:c]; return; }
@@ -405,7 +400,20 @@ static void _install(void) {
     swizzleClass(UIView_cls, @selector(transitionWithView:duration:options:animations:completion:), @selector(as_transitionWithView:duration:options:animations:completion:));
     swizzleClass(UIView_cls, @selector(transitionFromView:toView:duration:options:completion:), @selector(as_transitionFromView:toView:duration:options:completion:));
 
-    swizzleClass(CATx_cls, @selector(setAnimationDuration:), @selector(as_setAnimationDuration:));
+    // Use class_addMethod pattern for class method swizzle
+    if (CATx_cls) {
+        Class meta = objc_getMetaClass("CATransaction");
+        if (meta) {
+            Method m = class_getClassMethod(meta, @selector(setAnimationDuration:));
+            if (m) {
+                if (!class_addMethod(meta, @selector(as_setAnimationDuration:), method_getImplementation(m), method_getTypeEncoding(m))) {
+                    // Already has as_ version, just exchange
+                }
+                Method m2 = class_getClassMethod(meta, @selector(as_setAnimationDuration:));
+                if (m2) method_exchangeImplementations(m, m2);
+            }
+        }
+    }
 
     swizzleInstance(UIPA_cls, @selector(initWithDuration:timingParameters:), @selector(as_initWithDuration:timingParameters:));
     swizzleInstance(UIPA_cls, @selector(initWithDuration:dampingRatio:animations:), @selector(as_initWithDuration:dampingRatio:animations:));
