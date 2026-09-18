@@ -11,6 +11,7 @@
 
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import <UIKit/UIAccessibility.h>
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 
@@ -365,18 +366,11 @@ static void swizzleClass(Class cls, SEL orig, SEL repl) {
 }
 @end
 
-// MARK: - Reduce Motion
 
-@interface UIApplication (ASRM)
-@end
-@implementation UIApplication (ASRM)
-- (BOOL)as_isReduceMotionEnabled { return gReduceMotion ? YES : [self as_isReduceMotionEnabled]; }
-@end
-@interface UIAccessibility (ASRM)
-@end
-@implementation UIAccessibility (ASRM)
-+ (BOOL)as_isReduceMotionEnabled { return gReduceMotion ? YES : [self as_isReduceMotionEnabled]; }
-@end
+// UIAccessibility is a C function API — no ObjC swizzle needed.
+// ReduceMotion is handled via UIApplication isReduceMotionEnabled swizzle above.
+// (gReduceMotion bool directly short-circuits the check in that hook.)
+static BOOL (^as_reduceMotionOverride)(void) = nil;
 
 // MARK: - 全部 swizzle
 
@@ -391,7 +385,7 @@ static void _install(void) {
     Class CAAN_cls    = objc_getClass("CAAnimation");
     Class CALR_cls    = objc_getClass("CALayer");
     Class UIDy_cls    = objc_getClass("UIDynamicAnimator");
-    Class UIApp_cls   = objc_getClass("UIApplication");
+    // UIApplication swizzle removed — ReduceMotion via direct flag
     Class UIAc_cls    = objc_getClass("UIAccessibility");
 
     swizzleClass(UIView_cls, @selector(animateWithDuration:animations:), @selector(as_animateWithDuration:animations:));
@@ -425,8 +419,6 @@ static void _install(void) {
     swizzleInstance(CALR_cls, @selector(actionForKey:), @selector(as_actionForKey:));
     swizzleInstance(UIDy_cls, @selector(addBehavior:), @selector(as_addBehavior:));
 
-    swizzleInstance(UIApp_cls, @selector(isReduceMotionEnabled), @selector(as_isReduceMotionEnabled));
-    swizzleClass(UIAc_cls, @selector(isReduceMotionEnabled), @selector(as_isReduceMotionEnabled));
     // UIPresentationController / UIWindow / UIPageViewController / UIDocumentBrowserVC
     Class UIPrc_cls = objc_getClass("UIPresentationController");
     Class UIWin_cls = objc_getClass("UIWindow");
